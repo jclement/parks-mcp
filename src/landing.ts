@@ -75,8 +75,8 @@ export const LANDING_HTML = `<!doctype html>
   /* modal */
   .modal{position:fixed;inset:0;z-index:2000;background:#0008;display:none;align-items:center;justify-content:center;padding:18px}
   .modal.on{display:flex}
-  .card{background:#0e1622;border:1px solid var(--line);border-radius:18px;max-width:420px;width:100%;
-    padding:22px;box-shadow:0 30px 80px #000a;max-height:86vh;overflow:auto}
+  .card{background:#0e1622;border:1px solid var(--line);border-radius:18px;max-width:540px;width:100%;
+    padding:26px 28px;box-shadow:0 30px 80px #000a;max-height:88vh;overflow:auto}
   .card h2{margin:0 0 4px;font-size:21px;display:flex;align-items:center;gap:10px}
   .card h2 img{width:30px;height:30px}
   .card p{color:#cbd5e1;font-size:14px;line-height:1.55}
