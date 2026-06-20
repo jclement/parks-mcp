@@ -1,0 +1,40 @@
+# Explicit project name so this never collides with other "deploy" stacks.
+name: parks-mcp
+
+services:
+  # The Alberta Parks MCP server. Listens on :8000 (the gatecrash target).
+  parks-mcp:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: parks-mcp
+    restart: unless-stopped
+    environment:
+      PORT: "8000"
+      MCP_PATH: ${MCP_PATH:-/burrow/9f3a7c2e1d/mcp}
+      # Persist the metadata/availability cache here so restarts don't lose it.
+      CACHE_DIR: /data
+      CAMPGROUND_CACHE_TTL: ${CAMPGROUND_CACHE_TTL:-604800} # 7 days
+      AVAILABILITY_CACHE_TTL: ${AVAILABILITY_CACHE_TTL:-300} # 5 min
+    volumes:
+      # Bind-mounted cache (survives container restarts/recreates).
+      - ./cache:/data
+    # No published ports: the service is reached only through the gatecrash tunnel.
+    # Uncomment to also expose it on the host for local debugging:
+    # ports:
+    #   - "8000:8000"
+
+  # gatecrash tunnel client. Shares parks-mcp's network namespace so that
+  # `--target 127.0.0.1:8000` resolves to the parks-mcp server above.
+  gatecrash:
+    image: ghcr.io/jclement/gatecrash:latest
+    restart: unless-stopped
+    network_mode: "service:parks-mcp"
+    depends_on:
+      parks-mcp:
+        condition: service_healthy
+    environment:
+      GATECRASH_SERVER: ${GATECRASH_SERVER}
+      GATECRASH_HOST_KEY: ${GATECRASH_HOST_KEY}
+      GATECRASH_TOKEN: ${GATECRASH_TOKEN}
+      GATECRASH_TARGET: ${GATECRASH_TARGET:-127.0.0.1:8000}

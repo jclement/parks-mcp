@@ -1,0 +1,11 @@
+services:
+  parks-mcp:
+    build: .
+    image: parks-mcp
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Override with your own unguessable path; keep it secret.
+      MCP_PATH: ${MCP_PATH:-/burrow/9f3a7c2e1d/mcp}
+      PORT: "3000"
