@@ -40,7 +40,7 @@ const ICON_ROUTES: Record<string, { type: string; body: Buffer | string }> = {
 
 const PORT = Number(process.env.PORT ?? 3000);
 // The MCP endpoint lives at an unguessable path (the server is unauthenticated).
-const MCP_PATH = process.env.MCP_PATH ?? "/burrow/9f3a7c2e1d/mcp";
+const MCP_PATH = process.env.MCP_PATH ?? "/mcp";
 
 // Active sessions: an `initialize` mints one; later requests carry mcp-session-id.
 const transports = new Map<string, StreamableHTTPServerTransport>();
@@ -243,6 +243,7 @@ const httpServer = createServer(async (req, res) => {
     if (url.pathname === "/api/about") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=120" }).end(
         JSON.stringify({
+          mcpPath: MCP_PATH,
           status: harvestStatus(),
           bySource: statusByJurisdiction(),
           refresh: { camisHours: Number(process.env.HARVEST_CAMIS_HOURS) || 4, albertaHours: Number(process.env.HARVEST_ALBERTA_HOURS) || 24, windowDays: 90 },

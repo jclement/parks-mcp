@@ -47,10 +47,12 @@ export const LANDING_HTML = `<!doctype html>
   .ctl .info{cursor:pointer;color:var(--muted);border:1px solid var(--line);border-radius:50%;width:26px;height:26px;
     font-size:14px;line-height:24px;text-align:center;margin-bottom:2px;flex:none}
   .ctl .info:hover{color:var(--ink);border-color:#3a4d66}
-  .legend{position:absolute;z-index:1000;bottom:10px;left:12px;right:88px;text-align:center;
-    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 18px;backdrop-filter:blur(6px)}
-  .legend .keys{display:flex;gap:10px;flex-wrap:wrap;justify-content:space-around;align-items:center;font-size:12.5px;color:#cbd5e1}
+  .legend{position:absolute;z-index:1000;bottom:10px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 120px);
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 20px;backdrop-filter:blur(6px)}
+  .legend .keys{display:flex;gap:7px 13px;flex-wrap:wrap;justify-content:center;align-items:center;font-size:12.5px;color:#e8eef5}
   .legend .keys span{display:flex;align-items:center;gap:5px;white-space:nowrap}
+  .keys b{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+  .keys .vsep{width:1px;height:16px;background:var(--line);margin:0 3px}
   .dot{width:11px;height:11px;border-radius:50%;box-shadow:0 0 0 1.5px #0b0f14}
   .dia{width:10px;height:10px;transform:rotate(45deg);box-shadow:0 0 0 1.5px #0b0f14}
   .ring{width:10px;height:10px;border-radius:50%;background:#64748b}
@@ -64,8 +66,12 @@ export const LANDING_HTML = `<!doctype html>
     .bar{top:8px;left:8px;right:8px;gap:8px;justify-content:flex-end}
     .mhint:not(:empty){display:block}
   }
-  .keyrow{display:flex;flex-wrap:wrap;gap:9px 14px;font-size:12.5px;color:#cbd5e1;margin:8px 0 14px}
-  .keyrow span{display:flex;align-items:center;gap:5px}
+  .abkeys{margin:12px 0 4px}
+  .abkeys>div{display:flex;align-items:center;flex-wrap:wrap;gap:8px 13px;padding:7px 0;font-size:13px;color:#e8eef5;border-top:1px solid var(--line)}
+  .abkeys>div:first-child{border-top:0}
+  .abkeys>div b{color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;width:46px;flex:none}
+  .abkeys span{display:flex;align-items:center;gap:5px}
+  .card code{background:#0a0e14;border:1px solid var(--line);border-radius:6px;padding:2px 7px;font-size:12px;color:#a78bfa;word-break:break-all}
   /* modal */
   .modal{position:fixed;inset:0;z-index:2000;background:#0008;display:none;align-items:center;justify-content:center;padding:18px}
   .modal.on{display:flex}
@@ -114,12 +120,20 @@ export const LANDING_HTML = `<!doctype html>
   </div>
 </div>
 <div class="legend"><div class="keys">
+  <b>Source</b>
   <span><i class="dot" style="background:#f59e0b"></i>AB</span>
   <span><i class="dot" style="background:#38bdf8"></i>SK</span>
   <span><i class="dot" style="background:#22c55e"></i>BC</span>
   <span><i class="dot" style="background:#ef4444"></i>PC</span>
-  <span><i class="dot" style="background:#cbd5e1"></i>front·<i class="dia" style="background:#cbd5e1"></i>back</span>
-  <span><i class="ring g"></i>open <i class="ring r"></i>full <i class="ring o"></i>stale</span>
+  <i class="vsep"></i>
+  <b>Type</b>
+  <span><i class="dot" style="background:#cbd5e1"></i>front</span>
+  <span><i class="dia" style="background:#cbd5e1"></i>back</span>
+  <i class="vsep"></i>
+  <b>Avail</b>
+  <span><i class="ring g"></i>open</span>
+  <span><i class="ring r"></i>full</span>
+  <span><i class="ring o"></i>stale</span>
 </div></div>
 <div class="mhint" id="mhint"></div>
 
@@ -136,20 +150,26 @@ export const LANDING_HTML = `<!doctype html>
 </div></div>
 
 <div class="modal" id="about"><div class="card">
-  <h2><img src="/favicon.svg" alt="">About Camp, Eh?</h2>
+  <div style="text-align:center;margin-bottom:4px"><img src="/favicon.svg" alt="Camp, Eh?" style="width:58px;height:58px"></div>
+  <h2 style="justify-content:center">Camp, Eh?</h2>
   <p>A read-only mirror of campground reservation systems, refreshed on a schedule so lookups are instant. Availability can lag the official sites — always confirm before you book.</p>
-  <div class="keyrow">
-    <span><i class="dot" style="background:#f59e0b"></i>Alberta</span>
-    <span><i class="dot" style="background:#22c55e"></i>BC</span>
-    <span><i class="dot" style="background:#ef4444"></i>Parks Canada</span>
-    <span><i class="dot" style="background:#38bdf8"></i>Saskatchewan</span>
-    <span><i class="dia" style="background:#cbd5e1"></i>backcountry</span>
-    <span><i class="ring g"></i>open</span>
-    <span><i class="ring r"></i>full</span>
-    <span><i class="ring o"></i>stale</span>
+  <div class="abkeys">
+    <div><b>Source</b>
+      <span><i class="dot" style="background:#f59e0b"></i>Alberta</span>
+      <span><i class="dot" style="background:#38bdf8"></i>Saskatchewan</span>
+      <span><i class="dot" style="background:#22c55e"></i>BC</span>
+      <span><i class="dot" style="background:#ef4444"></i>Parks Canada</span></div>
+    <div><b>Type</b>
+      <span><i class="dot" style="background:#cbd5e1"></i>front-country</span>
+      <span><i class="dia" style="background:#cbd5e1"></i>backcountry</span></div>
+    <div><b>Avail</b>
+      <span><i class="ring g"></i>open</span>
+      <span><i class="ring r"></i>full</span>
+      <span><i class="ring o"></i>stale</span></div>
   </div>
   <div id="aboutSources"></div>
   <p class="muted" id="aboutRefresh" style="font-size:12.5px;margin-top:10px"></p>
+  <p id="aboutMcp" style="font-size:12.5px;margin-top:8px"></p>
   <p class="muted" style="font-size:11px;margin-top:6px">Map © OpenStreetMap contributors, © CARTO.</p>
   <button id="aboutClose">Close</button>
 </div></div>
@@ -266,7 +286,8 @@ export const LANDING_HTML = `<!doctype html>
   async function loadAbout(){
     try{const a=await(await fetch("/api/about")).json();
       $("aboutSources").innerHTML=Object.entries(a.bySource).map(([j,v])=>'<div class="src"><span><i class="dot" style="background:'+(COLOR[j]||"#64748b")+';display:inline-block;margin-right:6px"></i>'+esc(j)+' · '+v.harvested+' parks</span><span class="age">updated '+ago(v.newest)+'</span></div>').join("")||'<p class="muted">Harvest starting…</p>';
-      $("aboutRefresh").textContent="BC & Parks Canada refresh every "+a.refresh.camisHours+"h, Alberta every "+a.refresh.albertaHours+"h, over a "+a.refresh.windowDays+"-day window. "+a.status.harvested+" parks cached"+(a.status.errors?", "+a.status.errors+" errors":"")+".";
+      $("aboutRefresh").textContent="BC & Parks Canada refresh every "+a.refresh.camisHours+"h, Alberta & Saskatchewan every "+a.refresh.albertaHours+"h, over a "+a.refresh.windowDays+"-day window. "+a.status.harvested+" parks cached"+(a.status.errors?", "+a.status.errors+" errors":"")+".";
+      $("aboutMcp").innerHTML='Connect an AI assistant (MCP): <code>'+esc(location.origin+(a.mcpPath||"/mcp"))+'</code>';
     }catch(e){$("aboutSources").innerHTML='<p class="muted">status unavailable</p>';}
   }
 })();

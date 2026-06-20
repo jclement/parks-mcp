@@ -11,7 +11,7 @@ services:
     restart: unless-stopped
     environment:
       PORT: "8000"
-      MCP_PATH: ${MCP_PATH:-/burrow/9f3a7c2e1d/mcp}
+      MCP_PATH: ${MCP_PATH:-/mcp}
       # Persist the metadata/availability cache here so restarts don't lose it.
       CACHE_DIR: /data
       CAMPGROUND_CACHE_TTL: ${CAMPGROUND_CACHE_TTL:-604800} # 7 days
