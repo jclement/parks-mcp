@@ -47,6 +47,18 @@ export const LANDING_HTML = `<!doctype html>
   .ctl .info{cursor:pointer;color:var(--muted);border:1px solid var(--line);border-radius:50%;width:26px;height:26px;
     font-size:14px;line-height:24px;text-align:center;margin-bottom:2px;flex:none}
   .ctl .info:hover{color:var(--ink);border-color:#3a4d66}
+  .fwrap{position:relative;display:flex;align-items:center}
+  .fwrap .info{display:flex;align-items:center;justify-content:center}
+  .fwrap .fdot{position:absolute;top:-1px;right:-1px;width:8px;height:8px;border-radius:50%;background:#22c55e;border:1.5px solid var(--panel);display:none}
+  .fwrap.active .fdot{display:block}
+  .fpop{position:absolute;top:calc(100% + 8px);right:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:12px 14px;display:none;flex-direction:column;gap:11px;min-width:172px;box-shadow:0 10px 30px #000a;z-index:1200}
+  .fpop.open{display:flex}
+  .fpop .grp{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-bottom:6px}
+  .fpop label{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--ink);cursor:pointer;padding:2px 0}
+  .fpop label+label{margin-top:2px}
+  .fpop input{width:16px;height:16px;accent-color:#22c55e}
+  .fpop .hr{height:1px;background:var(--line);margin:1px 0}
   .legend{position:absolute;z-index:1000;bottom:10px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 120px);
     background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 20px;backdrop-filter:blur(6px)}
   .legend .keys{display:flex;gap:7px 13px;flex-wrap:wrap;justify-content:center;align-items:center;font-size:12.5px;color:#e8eef5}
@@ -116,7 +128,19 @@ export const LANDING_HTML = `<!doctype html>
   <div class="ctl">
     <label>Arrive<input type="date" id="start"></label>
     <label>Nights<input type="number" id="nights" min="1" max="14" value="2"></label>
-    <label class="hideb"><input type="checkbox" id="hideUnavail">Open only</label>
+    <div class="fwrap" id="fwrap">
+      <div class="info" id="filterBtn" title="Filters">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18l-7 8v5l-4 2v-7z"/></svg>
+      </div>
+      <span class="fdot"></span>
+      <div class="fpop" id="fpop">
+        <div><div class="grp">Type</div>
+          <label><input type="checkbox" id="fFront" checked>Front-country</label>
+          <label><input type="checkbox" id="fBack" checked>Backcountry</label></div>
+        <div class="hr"></div>
+        <label><input type="checkbox" id="hideUnavail">Open only</label>
+      </div>
+    </div>
     <div class="info" id="aboutBtn" title="About &amp; legend">?</div>
   </div>
 </div>
@@ -145,7 +169,7 @@ export const LANDING_HTML = `<!doctype html>
   <ul>
     <li>Pick an <b>arrive date + nights</b> up top.</li>
     <li>The map <b>lights up</b>: green = open, red = full, orange = a bit stale, grey = data still filling deeper for that date.</li>
-    <li>Tick <b>Open only</b> to hide the full ones.</li>
+    <li>Use the <b>filter</b> (funnel icon) for open-only, or front/backcountry.</li>
     <li>Tap a pin for a <b>colored month view</b> + booking link.</li>
   </ul>
   <button id="welcomeOk">Let's go</button> <a id="welcomeAbout" style="margin-left:8px">how it works</a>
@@ -191,11 +215,15 @@ export const LANDING_HTML = `<!doctype html>
   let bulk={}; let parkCount=0;
 
   // ----- prefs -----
-  const prefs={start:localStorage.getItem("ce_start")||"",nights:+(localStorage.getItem("ce_nights")||2),hide:localStorage.getItem("ce_hide")==="1"};
-  const elStart=$("start"),elNights=$("nights"),elHide=$("hideUnavail");
-  elStart.min=iso(new Date()); elStart.value=prefs.start; elNights.value=prefs.nights; elHide.checked=prefs.hide;
-  function savePrefs(){prefs.start=elStart.value;prefs.nights=Math.max(1,Math.min(14,+elNights.value||1));elNights.value=prefs.nights;prefs.hide=elHide.checked;
-    localStorage.setItem("ce_start",prefs.start);localStorage.setItem("ce_nights",prefs.nights);localStorage.setItem("ce_hide",prefs.hide?"1":"0");}
+  const prefs={start:localStorage.getItem("ce_start")||"",nights:+(localStorage.getItem("ce_nights")||2),hide:localStorage.getItem("ce_hide")==="1",
+    front:localStorage.getItem("ce_front")!=="0",back:localStorage.getItem("ce_back")!=="0"};
+  const elStart=$("start"),elNights=$("nights"),elHide=$("hideUnavail"),elFront=$("fFront"),elBack=$("fBack");
+  elStart.min=iso(new Date()); elStart.value=prefs.start; elNights.value=prefs.nights; elHide.checked=prefs.hide; elFront.checked=prefs.front; elBack.checked=prefs.back;
+  function savePrefs(){prefs.start=elStart.value;prefs.nights=Math.max(1,Math.min(14,+elNights.value||1));elNights.value=prefs.nights;
+    prefs.hide=elHide.checked;prefs.front=elFront.checked;prefs.back=elBack.checked;
+    localStorage.setItem("ce_start",prefs.start);localStorage.setItem("ce_nights",prefs.nights);localStorage.setItem("ce_hide",prefs.hide?"1":"0");
+    localStorage.setItem("ce_front",prefs.front?"1":"0");localStorage.setItem("ce_back",prefs.back?"1":"0");
+    $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back);}
 
   // ----- map -----
   const map=L.map("map",{zoomControl:false,attributionControl:false}).setView([54.5,-119],5);
@@ -215,7 +243,9 @@ export const LANDING_HTML = `<!doctype html>
     for(const e of entries){
       const st=statusOf(e.p);
       e.status=st;
-      const hideIt=prefs.hide&&prefs.start&&bulk[e.p.id]&&!bulk[e.p.id].available;
+      const back=e.p.t==="backcountry";
+      const typeHidden=(back&&!prefs.back)||(!back&&!prefs.front);
+      const hideIt=typeHidden||(prefs.hide&&prefs.start&&bulk[e.p.id]&&!bulk[e.p.id].available);
       if(hideIt){ if(map.hasLayer(e.m))e.m.remove(); }
       else { if(!map.hasLayer(e.m))e.m.addTo(map); e.m.setIcon(icon(e.p,st)); }
     }
@@ -230,7 +260,12 @@ export const LANDING_HTML = `<!doctype html>
     refreshPins();
   }
   function onPrefsChanged(){savePrefs();lightUp();}
-  elStart.onchange=onPrefsChanged; elNights.onchange=onPrefsChanged; elHide.onchange=()=>{savePrefs();refreshPins();};
+  elStart.onchange=onPrefsChanged; elNights.onchange=onPrefsChanged;
+  for(const el of [elHide,elFront,elBack])el.onchange=()=>{savePrefs();refreshPins();};
+  $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back);
+  $("filterBtn").onclick=(ev)=>{ev.stopPropagation();$("fpop").classList.toggle("open");};
+  $("fpop").addEventListener("click",ev=>ev.stopPropagation());
+  document.addEventListener("click",()=>$("fpop").classList.remove("open"));
 
   // ----- popup w/ mini-month -----
   function popupShell(p){
