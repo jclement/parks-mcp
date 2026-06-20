@@ -48,19 +48,36 @@ class CamisProvider implements Provider {
     return this.api<RawResourceLocation[]>("/api/resourceLocation");
   }
 
+  /** Category ids whose name marks a backcountry experience (permit, registration,
+   * wilderness, backpacking, backcountry site/zone/cabin). Tenant-specific ids, so
+   * we resolve them by name each time rather than hardcoding. */
+  private async backcountryCategoryIds(): Promise<Set<number>> {
+    try {
+      const cats = await this.api<RawCategory[]>("/api/resourceCategory");
+      return new Set(
+        cats
+          .filter((c) => /backcountry|wilderness|backpack/i.test(c.localizedValues?.[0]?.name || ""))
+          .map((c) => c.resourceCategoryId),
+      );
+    } catch {
+      return new Set();
+    }
+  }
+
   async list(): Promise<CampgroundListItem[]> {
-    const locations = await this.resourceLocations();
+    const [locations, backIds] = await Promise.all([this.resourceLocations(), this.backcountryCategoryIds()]);
     return locations
       .filter((r) => !NON_CAMPING.test(localName(r.localizedValues)))
       .map((r) => {
       const { lat, lng } = parseGps(r.gpsCoordinates);
       const mapId = String(r.rootMapId);
       const rlId = String(r.resourceLocationId);
+      const isBack = (r.resourceCategoryIds || []).some((c) => backIds.has(c));
       return {
         parkId: `${rlId}_${mapId}`,
         name: localName(r.localizedValues) || rlId,
         jurisdiction: this.jurisdiction,
-        type: "campground",
+        type: isBack ? "backcountry" : "campground",
         region: r.region || undefined,
         siteTypes: [],
         lat,
@@ -166,6 +183,11 @@ interface RawResourceLocation {
   rootMapId: number;
   region?: string;
   gpsCoordinates?: unknown;
+  localizedValues?: RawLocalized[];
+  resourceCategoryIds?: number[];
+}
+interface RawCategory {
+  resourceCategoryId: number;
   localizedValues?: RawLocalized[];
 }
 interface RawAvailability {
