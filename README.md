@@ -61,10 +61,11 @@ MCP endpoint: `http://<host>:3000/burrow/9f3a7c2e1d/mcp` (override via `MCP_PATH
 `/` serves an interactive map of all campgrounds (pins colored by jurisdiction,
 shaped by type, with copyable lat/long, booking links, and lazily-loaded
 descriptions); `/api/campgrounds`, `/api/campground?id=`, and `/api/stats` back it.
-Coordinates come from each park system where published; for the many that don't
-expose any (all of BC/Parks Canada, and Alberta's bulk list), a baked geocoded
-lookup table (`src/data/coords.json`, ~280 parks) fills the gaps — website coords
-always win. `/healthz` is a health check;
+Coordinates come from each park system where published; for the rest, a baked
+lookup table (`src/data/coords.json`, 386/387 parks) fills the gaps — sourced from
+the BC Parks open data API (authoritative for all BC parks), Alberta's official
+facility pages, and park-aware OpenStreetMap geocoding for Parks Canada. Website
+coords always win over the baked table. `/healthz` is a health check;
 `robots.txt` disallows everything.
 
 ### ⚠️ Where you run it matters
