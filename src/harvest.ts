@@ -37,8 +37,13 @@ function openDb(): Database | null {
     );
     d.run("CREATE INDEX IF NOT EXISTS idx_site_park ON site_avail(parkId)");
     d.run(
-      "CREATE TABLE IF NOT EXISTS park_meta (parkId TEXT PRIMARY KEY, windowStart TEXT, jurisdiction TEXT, bookingUrl TEXT, siteCount INTEGER, updated INTEGER, ok INTEGER, error TEXT)",
+      "CREATE TABLE IF NOT EXISTS park_meta (parkId TEXT PRIMARY KEY, windowStart TEXT, windowDays INTEGER, jurisdiction TEXT, bookingUrl TEXT, siteCount INTEGER, updated INTEGER, ok INTEGER, error TEXT)",
     );
+    try {
+      d.run("ALTER TABLE park_meta ADD COLUMN windowDays INTEGER"); // migrate older DBs
+    } catch {
+      /* column already exists */
+    }
     return d;
   } catch (e) {
     console.warn(`harvest: disabled (cannot open SQLite): ${(e as Error).message}`);
@@ -64,6 +69,7 @@ function getBit(bits: Uint8Array, i: number): boolean {
 export function storeHarvest(
   parkId: string,
   windowStart: string,
+  windowDays: number,
   jurisdiction: string,
   bookingUrl: string,
   sites: SiteAvailability[],
@@ -83,8 +89,8 @@ export function storeHarvest(
       ins.run(parkId, s.siteId, s.label, s.loop ?? null, s.siteUrl ?? null, s.quota ?? null, Buffer.from(bits));
     }
     db!.run(
-      "INSERT OR REPLACE INTO park_meta (parkId, windowStart, jurisdiction, bookingUrl, siteCount, updated, ok, error) VALUES (?, ?, ?, ?, ?, ?, 1, NULL)",
-      [parkId, windowStart, jurisdiction, bookingUrl, sites.length, Date.now()],
+      "INSERT OR REPLACE INTO park_meta (parkId, windowStart, windowDays, jurisdiction, bookingUrl, siteCount, updated, ok, error) VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL)",
+      [parkId, windowStart, windowDays, jurisdiction, bookingUrl, sites.length, Date.now()],
     );
   });
   tx();
@@ -102,6 +108,7 @@ export function storeError(parkId: string, message: string): void {
 interface MetaRow {
   parkId: string;
   windowStart: string;
+  windowDays: number | null;
   jurisdiction: string;
   bookingUrl: string;
   updated: number;
@@ -109,7 +116,7 @@ interface MetaRow {
 function okMeta(parkId: string): MetaRow | null {
   if (!db) return null;
   return (db
-    .query("SELECT parkId, windowStart, jurisdiction, bookingUrl, updated FROM park_meta WHERE parkId = ? AND ok = 1")
+    .query("SELECT parkId, windowStart, windowDays, jurisdiction, bookingUrl, updated FROM park_meta WHERE parkId = ? AND ok = 1")
     .get(parkId) as MetaRow) || null;
 }
 
@@ -136,8 +143,9 @@ export function getCachedAvailability(
 ): CachedAvailability | null {
   const m = okMeta(parkId);
   if (!m) return null;
+  const covered = m.windowDays ?? HARVEST_DAYS;
   const offset = daysBetween(m.windowStart, startISO);
-  if (offset < 0 || offset + span > HARVEST_DAYS) return null;
+  if (offset < 0 || offset + span > covered) return null; // outside the harvested window
   const rows = db!
     .query("SELECT siteId, label, loop, siteUrl, quota, bits FROM site_avail WHERE parkId = ?")
     .all(parkId) as { siteId: string; label: string; loop: string | null; siteUrl: string | null; quota: string | null; bits: Uint8Array }[];
@@ -167,14 +175,14 @@ export function bulkAvailability(
   nights: number,
 ): Record<string, { available: boolean; siteCount: number; stale: boolean }> {
   if (!db) return {};
-  const metas = db.query("SELECT parkId, windowStart, updated FROM park_meta WHERE ok = 1").all() as {
-    parkId: string; windowStart: string; updated: number;
+  const metas = db.query("SELECT parkId, windowStart, windowDays, updated FROM park_meta WHERE ok = 1").all() as {
+    parkId: string; windowStart: string; windowDays: number | null; updated: number;
   }[];
   const out: Record<string, { available: boolean; siteCount: number; stale: boolean }> = {};
   const siteStmt = db.query("SELECT bits FROM site_avail WHERE parkId = ?");
   for (const m of metas) {
     const offset = daysBetween(m.windowStart, startISO);
-    if (offset < 0 || offset + nights > HARVEST_DAYS) continue; // not covered
+    if (offset < 0 || offset + nights > (m.windowDays ?? HARVEST_DAYS)) continue; // not covered
     const rows = siteStmt.all(m.parkId) as { bits: Uint8Array }[];
     let count = 0;
     for (const r of rows) {
@@ -196,12 +204,13 @@ export function calendar(
 ): { stale: boolean; cells: { date: string; available: boolean; siteCount: number }[] } | null {
   const m = okMeta(parkId);
   if (!m) return null;
+  const covered = m.windowDays ?? HARVEST_DAYS;
   const rows = db!.query("SELECT bits FROM site_avail WHERE parkId = ?").all(parkId) as { bits: Uint8Array }[];
   const cells: { date: string; available: boolean; siteCount: number }[] = [];
   for (let d = 0; d < days; d++) {
     const date = addDaysISO(startISO, d);
     const offset = daysBetween(m.windowStart, date);
-    if (offset < 0 || offset + nights > HARVEST_DAYS) { cells.push({ date, available: false, siteCount: -1 }); continue; }
+    if (offset < 0 || offset + nights > covered) { cells.push({ date, available: false, siteCount: -1 }); continue; }
     let count = 0;
     for (const r of rows) {
       let ok = true;
@@ -265,8 +274,8 @@ export function windowInfo(): { windowDays: number; today: string } {
 }
 
 /** When was a park last harvested (ms epoch), or 0 if never / errored. */
-export function lastHarvest(parkId: string): { updated: number; windowStart: string | null } {
-  if (!db) return { updated: 0, windowStart: null };
-  const r = db.query("SELECT updated, windowStart, ok FROM park_meta WHERE parkId = ?").get(parkId) as { updated: number; windowStart: string | null; ok: number } | null;
-  return r && r.ok ? { updated: r.updated, windowStart: r.windowStart } : { updated: 0, windowStart: null };
+export function lastHarvest(parkId: string): { updated: number; windowStart: string | null; windowDays: number } {
+  if (!db) return { updated: 0, windowStart: null, windowDays: 0 };
+  const r = db.query("SELECT updated, windowStart, windowDays, ok FROM park_meta WHERE parkId = ?").get(parkId) as { updated: number; windowStart: string | null; windowDays: number | null; ok: number } | null;
+  return r && r.ok ? { updated: r.updated, windowStart: r.windowStart, windowDays: r.windowDays ?? 90 } : { updated: 0, windowStart: null, windowDays: 0 };
 }

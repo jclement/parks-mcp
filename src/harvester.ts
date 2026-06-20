@@ -23,27 +23,49 @@ type Lane = keyof typeof LANES;
 const isAspira = (id: string) => id.startsWith("ab") || id.startsWith("sk");
 const interval = (id: string) => (isAspira(id) ? ALBERTA_INTERVAL : CAMIS_INTERVAL);
 
+// Aspira (AB/SK) is slow, so harvest a short window first — real data for every park
+// fast — then expand to the full window once that quick pass is done.
+const ASPIRA_PHASE1_DAYS = Number(process.env.HARVEST_ASPIRA_PHASE1_DAYS) || 30;
+let aspiraTarget = ASPIRA_PHASE1_DAYS;
+const targetDays = (id: string) => (isAspira(id) ? aspiraTarget : HARVEST_DAYS);
+
 const today = () => new Date().toISOString().slice(0, 10);
 let parkIds: string[] = [];
 const rr: Record<Lane, number> = { camis: 0, aspira: 0 };
 
-/** Epoch ms at which a park becomes due (0 = due now: never harvested or window rolled). */
+/** Epoch ms at which a park becomes due (0 = due now: never harvested, window rolled,
+ * or its harvested window is shorter than the current target). */
 function dueAt(parkId: string, windowStart: string): number {
-  const { updated, windowStart: ws } = lastHarvest(parkId);
-  if (!updated || ws !== windowStart) return 0;
+  const { updated, windowStart: ws, windowDays } = lastHarvest(parkId);
+  if (!updated || ws !== windowStart || windowDays < targetDays(parkId)) return 0;
   return updated + interval(parkId);
 }
 
-async function harvestOne(parkId: string, windowStart: string): Promise<void> {
+/** Once every Aspira park has the phase-1 window for today, expand to the full window. */
+function maybeAdvancePhase(windowStart: string): void {
+  if (aspiraTarget >= HARVEST_DAYS) return;
+  const aspira = parkIds.filter(isAspira);
+  if (!aspira.length) return;
+  const allDone = aspira.every((id) => {
+    const m = lastHarvest(id);
+    return m.updated && m.windowStart === windowStart && m.windowDays >= ASPIRA_PHASE1_DAYS;
+  });
+  if (allDone) {
+    aspiraTarget = HARVEST_DAYS;
+    console.log(`harvester: Aspira phase-1 (${ASPIRA_PHASE1_DAYS}d) complete — expanding to ${HARVEST_DAYS}d`);
+  }
+}
+
+async function harvestOne(parkId: string, windowStart: string, days: number): Promise<void> {
   harvestStart(parkId);
   const t = Date.now();
   let ok = true;
   let sites = 0;
   let error: string | undefined;
   try {
-    const r = await rawAvailability(parkId, windowStart, HARVEST_DAYS);
+    const r = await rawAvailability(parkId, windowStart, days);
     sites = r.sites.length;
-    storeHarvest(parkId, windowStart, r.jurisdiction, r.bookingUrl, r.sites);
+    storeHarvest(parkId, windowStart, days, r.jurisdiction, r.bookingUrl, r.sites);
   } catch (e) {
     ok = false;
     error = (e as Error).message;
@@ -64,6 +86,7 @@ async function laneTick(lane: Lane): Promise<void> {
     const { prefixes } = LANES[lane];
     const windowStart = today();
     const now = Date.now();
+    if (lane === "aspira") maybeAdvancePhase(windowStart);
     // Round-robin within the lane's provinces (pick oldest-due of the next one).
     let pick: string | null = null;
     for (let k = 0; k < prefixes.length; k++) {
@@ -84,7 +107,7 @@ async function laneTick(lane: Lane): Promise<void> {
         break;
       }
     }
-    if (pick) await harvestOne(pick, windowStart);
+    if (pick) await harvestOne(pick, windowStart, targetDays(pick));
   } catch (e) {
     console.warn(`harvester ${lane} error:`, (e as Error).message);
   }
