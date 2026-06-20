@@ -37,12 +37,14 @@ function openDb(): Database | null {
     );
     d.run("CREATE INDEX IF NOT EXISTS idx_site_park ON site_avail(parkId)");
     d.run(
-      "CREATE TABLE IF NOT EXISTS park_meta (parkId TEXT PRIMARY KEY, windowStart TEXT, windowDays INTEGER, jurisdiction TEXT, bookingUrl TEXT, siteCount INTEGER, updated INTEGER, ok INTEGER, error TEXT)",
+      "CREATE TABLE IF NOT EXISTS park_meta (parkId TEXT PRIMARY KEY, windowStart TEXT, windowDays INTEGER, occupancy REAL, jurisdiction TEXT, bookingUrl TEXT, siteCount INTEGER, updated INTEGER, ok INTEGER, error TEXT)",
     );
-    try {
-      d.run("ALTER TABLE park_meta ADD COLUMN windowDays INTEGER"); // migrate older DBs
-    } catch {
-      /* column already exists */
+    for (const col of ["windowDays INTEGER", "occupancy REAL"]) {
+      try {
+        d.run(`ALTER TABLE park_meta ADD COLUMN ${col}`); // migrate older DBs
+      } catch {
+        /* column already exists */
+      }
     }
     return d;
   } catch (e) {
@@ -78,19 +80,26 @@ export function storeHarvest(
   const ins = db.prepare(
     "INSERT OR REPLACE INTO site_avail (parkId, siteId, label, loop, siteUrl, quota, bits) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
+  let availDays = 0;
   const tx = db.transaction(() => {
     db!.run("DELETE FROM site_avail WHERE parkId = ?", [parkId]);
     for (const s of sites) {
       const bits = new Uint8Array(BYTES);
       for (const date of s.available) {
         const i = daysBetween(windowStart, date);
-        if (i >= 0 && i < HARVEST_DAYS) bits[i >> 3] |= 1 << (i & 7);
+        if (i >= 0 && i < windowDays) {
+          bits[i >> 3] |= 1 << (i & 7);
+          availDays++;
+        }
       }
       ins.run(parkId, s.siteId, s.label, s.loop ?? null, s.siteUrl ?? null, s.quota ?? null, Buffer.from(bits));
     }
+    // Occupancy = fraction of site-days that are booked (1 = full, 0 = wide open).
+    const totalDays = sites.length * windowDays;
+    const occupancy = totalDays > 0 ? Math.max(0, Math.min(1, 1 - availDays / totalDays)) : 0;
     db!.run(
-      "INSERT OR REPLACE INTO park_meta (parkId, windowStart, windowDays, jurisdiction, bookingUrl, siteCount, updated, ok, error) VALUES (?, ?, ?, ?, ?, ?, ?, 1, NULL)",
-      [parkId, windowStart, windowDays, jurisdiction, bookingUrl, sites.length, Date.now()],
+      "INSERT OR REPLACE INTO park_meta (parkId, windowStart, windowDays, occupancy, jurisdiction, bookingUrl, siteCount, updated, ok, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NULL)",
+      [parkId, windowStart, windowDays, occupancy, jurisdiction, bookingUrl, sites.length, Date.now()],
     );
   });
   tx();
@@ -274,8 +283,10 @@ export function windowInfo(): { windowDays: number; today: string } {
 }
 
 /** When was a park last harvested (ms epoch), or 0 if never / errored. */
-export function lastHarvest(parkId: string): { updated: number; windowStart: string | null; windowDays: number } {
-  if (!db) return { updated: 0, windowStart: null, windowDays: 0 };
-  const r = db.query("SELECT updated, windowStart, windowDays, ok FROM park_meta WHERE parkId = ?").get(parkId) as { updated: number; windowStart: string | null; windowDays: number | null; ok: number } | null;
-  return r && r.ok ? { updated: r.updated, windowStart: r.windowStart, windowDays: r.windowDays ?? 90 } : { updated: 0, windowStart: null, windowDays: 0 };
+export function lastHarvest(parkId: string): { updated: number; windowStart: string | null; windowDays: number; occupancy: number } {
+  if (!db) return { updated: 0, windowStart: null, windowDays: 0, occupancy: 0 };
+  const r = db.query("SELECT updated, windowStart, windowDays, occupancy, ok FROM park_meta WHERE parkId = ?").get(parkId) as { updated: number; windowStart: string | null; windowDays: number | null; occupancy: number | null; ok: number } | null;
+  return r && r.ok
+    ? { updated: r.updated, windowStart: r.windowStart, windowDays: r.windowDays ?? 90, occupancy: r.occupancy ?? 0 }
+    : { updated: 0, windowStart: null, windowDays: 0, occupancy: 0 };
 }

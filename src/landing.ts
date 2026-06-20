@@ -286,7 +286,7 @@ export const LANDING_HTML = `<!doctype html>
   async function loadAbout(){
     try{const a=await(await fetch("/api/about")).json();
       $("aboutSources").innerHTML=Object.entries(a.bySource).map(([j,v])=>'<div class="src"><span><i class="dot" style="background:'+(COLOR[j]||"#64748b")+';display:inline-block;margin-right:6px"></i>'+esc(j)+' · '+v.harvested+' parks</span><span class="age">updated '+ago(v.newest)+'</span></div>').join("")||'<p class="muted">Harvest starting…</p>';
-      $("aboutRefresh").textContent="BC & Parks Canada refresh every "+a.refresh.camisHours+"h, Alberta & Saskatchewan every "+a.refresh.albertaHours+"h, over a "+a.refresh.windowDays+"-day window. "+a.status.harvested+" parks cached"+(a.status.errors?", "+a.status.errors+" errors":"")+".";
+      $("aboutRefresh").textContent="Refreshed adaptively over a "+a.refresh.windowDays+"-day window — parks near capacity every few hours, quiet ones up to ~daily. "+a.status.harvested+" parks cached"+(a.status.errors?", "+a.status.errors+" errors":"")+".";
       $("aboutMcp").innerHTML='Connect an AI assistant (MCP): <code>'+esc(location.origin+(a.mcpPath||"/mcp"))+'</code>';
     }catch(e){$("aboutSources").innerHTML='<p class="muted">status unavailable</p>';}
   }

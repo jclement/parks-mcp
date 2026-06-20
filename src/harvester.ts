@@ -9,9 +9,6 @@ import { campgroundInfo, listCampgrounds, rawAvailability } from "./providers/re
 import { HARVEST_DAYS, harvestEnabled, lastHarvest, storeError, storeHarvest } from "./harvest.ts";
 import { harvestDone, harvestStart } from "./stats.ts";
 
-const CAMIS_INTERVAL = (Number(process.env.HARVEST_CAMIS_HOURS) || 4) * 3600 * 1000; // BC + Parks Canada
-const ALBERTA_INTERVAL = (Number(process.env.HARVEST_ALBERTA_HOURS) || 24) * 3600 * 1000; // Aspira (AB, SK)
-
 // Two independent lanes so a slow Aspira park can't starve the cheap Camis ones.
 // Camis (BC/PC) is one fast call per park; Aspira (AB/SK) paginates and is slow.
 const LANES = {
@@ -21,7 +18,19 @@ const LANES = {
 type Lane = keyof typeof LANES;
 
 const isAspira = (id: string) => id.startsWith("ab") || id.startsWith("sk");
-const interval = (id: string) => (isAspira(id) ? ALBERTA_INTERVAL : CAMIS_INTERVAL);
+
+// Adaptive refresh: parks near capacity change fast (cancellations matter) → refresh
+// often; wide-open parks barely change → refresh rarely. Aspira gets a gentler floor
+// since each harvest is expensive.
+function intervalMs(parkId: string, occupancy: number): number {
+  let hours: number;
+  if (occupancy >= 0.85) hours = 4; // near full → ~6×/day
+  else if (occupancy >= 0.6) hours = 8; // ~3×/day
+  else if (occupancy >= 0.3) hours = 16;
+  else hours = 36; // wide open
+  if (isAspira(parkId)) hours = Math.max(hours, 8);
+  return hours * 3600 * 1000;
+}
 
 // Aspira (AB/SK) is slow, so harvest a short window first — real data for every park
 // fast — then expand to the full window once that quick pass is done.
@@ -36,9 +45,9 @@ const rr: Record<Lane, number> = { camis: 0, aspira: 0 };
 /** Epoch ms at which a park becomes due (0 = due now: never harvested, window rolled,
  * or its harvested window is shorter than the current target). */
 function dueAt(parkId: string, windowStart: string): number {
-  const { updated, windowStart: ws, windowDays } = lastHarvest(parkId);
-  if (!updated || ws !== windowStart || windowDays < targetDays(parkId)) return 0;
-  return updated + interval(parkId);
+  const m = lastHarvest(parkId);
+  if (!m.updated || m.windowStart !== windowStart || m.windowDays < targetDays(parkId)) return 0;
+  return m.updated + intervalMs(parkId, m.occupancy);
 }
 
 /** Once every Aspira park has the phase-1 window for today, expand to the full window. */
@@ -127,7 +136,7 @@ export function startHarvester(): void {
   }
   console.log(
     `harvester: 2 lanes — camis(BC/PC) ~${LANES.camis.spacing / 1000}s, aspira(AB/SK) ~${LANES.aspira.spacing / 1000}s; ` +
-      `refresh camis ${Math.round(CAMIS_INTERVAL / 3.6e6)}h, aspira ${Math.round(ALBERTA_INTERVAL / 3.6e6)}h`,
+      `adaptive refresh 4–36h by occupancy; Aspira phase-1 ${ASPIRA_PHASE1_DAYS}d`,
   );
   setTimeout(() => laneTick("camis"), 1500);
   setTimeout(() => laneTick("aspira"), 3000);

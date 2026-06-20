@@ -119,7 +119,7 @@ async function tick(){
   // storage
   const dbrows=Object.entries(d.db||{}).map(([f,s])=>'<tr><td class="mono">'+esc(f)+'</td><td>'+kb(s)+'</td></tr>').join("");
   document.getElementById("storage").innerHTML='<table><tr><th>file</th><th>size</th></tr>'+(dbrows||'<tr><td colspan=2 class="empty">no cache dir</td></tr>')+'</table>'+
-    '<p style="color:var(--muted);font-size:12.5px;margin:10px 0 0">Refresh: BC &amp; Parks Canada every '+(d.refresh?d.refresh.camisHours:4)+'h, Alberta every '+(d.refresh?d.refresh.albertaHours:24)+'h, one park every '+(d.refresh?d.refresh.spacingSeconds:15)+'s.</p>';
+    '<p style="color:var(--muted);font-size:12.5px;margin:10px 0 0">Adaptive refresh: parks near capacity every few hours, wide-open ones up to ~daily, over a '+(d.refresh?d.refresh.windowDays:90)+'-day window (Aspira first pass '+(d.refresh?d.refresh.phase1Days:30)+'d). Lanes: Camis ~'+(d.refresh?d.refresh.camisLaneSeconds:6)+'s, Aspira ~'+(d.refresh?d.refresh.aspiraLaneSeconds:12)+'s.</p>';
 }
 tick(); setInterval(tick, 5000);
 </script>

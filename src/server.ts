@@ -160,7 +160,7 @@ const httpServer = createServer(async (req, res) => {
             lng: c.lng,
             url: c.bookingUrl,
           }));
-        res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=600" }).end(
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=60" }).end(
           JSON.stringify({ count: pins.length, total: all.length, pins }),
         );
       } catch (e) {
@@ -227,9 +227,11 @@ const httpServer = createServer(async (req, res) => {
           harvest: harvestEvents,
           mcp: mcpStats,
           refresh: {
-            camisHours: Number(process.env.HARVEST_CAMIS_HOURS) || 4,
-            albertaHours: Number(process.env.HARVEST_ALBERTA_HOURS) || 24,
-            spacingSeconds: Number(process.env.HARVEST_SPACING_SECONDS) || 15,
+            adaptive: "4–36h by occupancy",
+            windowDays: 90,
+            phase1Days: Number(process.env.HARVEST_ASPIRA_PHASE1_DAYS) || 30,
+            camisLaneSeconds: Number(process.env.HARVEST_CAMIS_SPACING_SECONDS) || 6,
+            aspiraLaneSeconds: Number(process.env.HARVEST_ASPIRA_SPACING_SECONDS) || 12,
           },
         }),
       );
@@ -246,7 +248,7 @@ const httpServer = createServer(async (req, res) => {
           mcpPath: MCP_PATH,
           status: harvestStatus(),
           bySource: statusByJurisdiction(),
-          refresh: { camisHours: Number(process.env.HARVEST_CAMIS_HOURS) || 4, albertaHours: Number(process.env.HARVEST_ALBERTA_HOURS) || 24, windowDays: 90 },
+          refresh: { adaptive: true, windowDays: 90, phase1Days: Number(process.env.HARVEST_ASPIRA_PHASE1_DAYS) || 30 },
         }),
       );
       return;
