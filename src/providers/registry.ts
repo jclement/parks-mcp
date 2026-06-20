@@ -77,6 +77,77 @@ export function findVacancies(
   });
 }
 
+export interface SearchParams {
+  query?: string;
+  jurisdiction?: string;
+  /** Center for a radius search: explicit coords, or a place name (geocoded). */
+  lat?: number;
+  lng?: number;
+  near?: string;
+  radiusKm?: number;
+  limit?: number;
+}
+
+export interface SearchHit extends CampgroundListItem {
+  distanceKm?: number;
+}
+
+/** Find campgrounds by name/region/jurisdiction and/or within a radius of a point. */
+export async function searchCampgrounds(p: SearchParams): Promise<SearchHit[]> {
+  const all = await listCampgrounds();
+  const q = p.query?.trim().toLowerCase();
+  const jur = p.jurisdiction?.trim().toLowerCase();
+
+  let center: { lat: number; lng: number } | null = null;
+  if (p.lat != null && p.lng != null) center = { lat: p.lat, lng: p.lng };
+  else if (p.near) center = await geocode(p.near);
+  const radius = p.radiusKm ?? (center ? 50 : undefined);
+
+  let hits: SearchHit[] = all.filter((c) => {
+    if (q && !(`${c.name} ${c.region ?? ""}`.toLowerCase().includes(q))) return false;
+    if (jur && !c.jurisdiction.toLowerCase().includes(jur)) return false;
+    return true;
+  });
+
+  if (center) {
+    hits = hits
+      .map((c) =>
+        c.lat != null && c.lng != null
+          ? { ...c, distanceKm: haversineKm(center!.lat, center!.lng, c.lat, c.lng) }
+          : { ...c, distanceKm: undefined },
+      )
+      .filter((c) => c.distanceKm != null && c.distanceKm <= radius!)
+      .sort((a, b) => (a.distanceKm ?? Infinity) - (b.distanceKm ?? Infinity));
+  } else {
+    hits.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  return hits.slice(0, p.limit ?? 50);
+}
+
+/** Geocode a place name via OpenStreetMap (cached long-term). */
+function geocode(place: string): Promise<{ lat: number; lng: number } | null> {
+  return cached(`geocode:${place.toLowerCase()}`, METADATA_TTL, async () => {
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=ca&q=${encodeURIComponent(place)}`;
+    const res = await fetch(url, {
+      headers: { "User-Agent": "parks-mcp/1.0 (personal)", "Accept-Language": "en" },
+    });
+    if (!res.ok) return null;
+    const j = (await res.json()) as { lat: string; lon: string }[];
+    return j[0] ? { lat: Number(j[0].lat), lng: Number(j[0].lon) } : null;
+  });
+}
+
+function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(a)) * 10) / 10;
+}
+
 export function campgroundInfo(parkId: string): Promise<CampgroundInfo> {
   return cached(`info:${parkId}`, METADATA_TTL, async () => {
     const { provider, localId } = route(parkId);

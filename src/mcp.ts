@@ -6,6 +6,7 @@ import {
   findVacancies,
   getAvailability,
   listCampgrounds,
+  searchCampgrounds,
 } from "./providers/registry.ts";
 
 const ISO = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be ISO YYYY-MM-DD");
@@ -38,6 +39,37 @@ export function registerTools(server: McpServer) {
     async () => {
       try {
         return ok(await listCampgrounds());
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.tool(
+    "search_campgrounds",
+    "Find campgrounds by area: filter by name/region text and/or jurisdiction, " +
+      "and/or find those within a radius of a place. Use this instead of " +
+      "list_campgrounds when the user names a place or region (e.g. 'near Banff', " +
+      "'around Calgary within 100km', 'Kananaskis backcountry'). Provide `near` (a " +
+      "place name, geocoded) or explicit `lat`/`lng`, with `radiusKm` (default 50). " +
+      "Returns matches sorted by distance when a center is given, each with a " +
+      "parkId you can pass to the availability tools.",
+    {
+      query: z.string().optional().describe("Name/region text to match, e.g. 'lake', 'Kananaskis'"),
+      jurisdiction: z
+        .string()
+        .optional()
+        .describe("Filter: 'Alberta Parks' | 'BC Parks' | 'Parks Canada'"),
+      near: z.string().optional().describe("Place name to center a radius search on, e.g. 'Banff, AB'"),
+      lat: z.number().optional().describe("Center latitude (alternative to `near`)"),
+      lng: z.number().optional().describe("Center longitude (alternative to `near`)"),
+      radiusKm: z.number().positive().max(1000).optional().describe("Search radius in km (default 50)"),
+      limit: z.number().int().min(1).max(200).optional().describe("Max results (default 50)"),
+    },
+    async (args) => {
+      try {
+        const hits = await searchCampgrounds(args);
+        return ok({ count: hits.length, results: hits });
       } catch (e) {
         return fail(e);
       }
