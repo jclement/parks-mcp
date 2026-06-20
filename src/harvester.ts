@@ -9,15 +9,23 @@ import { campgroundInfo, listCampgrounds, rawAvailability } from "./providers/re
 import { HARVEST_DAYS, harvestEnabled, lastHarvest, storeError, storeHarvest } from "./harvest.ts";
 import { harvestDone, harvestStart } from "./stats.ts";
 
-const CAMIS_INTERVAL = (Number(process.env.HARVEST_CAMIS_HOURS) || 4) * 3600 * 1000; // default 4h
-const ALBERTA_INTERVAL = (Number(process.env.HARVEST_ALBERTA_HOURS) || 24) * 3600 * 1000; // 24h
-const SPACING_MS = (Number(process.env.HARVEST_SPACING_SECONDS) || 15) * 1000;
+const CAMIS_INTERVAL = (Number(process.env.HARVEST_CAMIS_HOURS) || 4) * 3600 * 1000; // BC + Parks Canada
+const ALBERTA_INTERVAL = (Number(process.env.HARVEST_ALBERTA_HOURS) || 24) * 3600 * 1000; // Aspira (AB, SK)
+
+// Two independent lanes so a slow Aspira park can't starve the cheap Camis ones.
+// Camis (BC/PC) is one fast call per park; Aspira (AB/SK) paginates and is slow.
+const LANES = {
+  camis: { prefixes: ["bc", "pc"], spacing: (Number(process.env.HARVEST_CAMIS_SPACING_SECONDS) || 6) * 1000 },
+  aspira: { prefixes: ["ab", "sk"], spacing: (Number(process.env.HARVEST_ASPIRA_SPACING_SECONDS) || 12) * 1000 },
+};
+type Lane = keyof typeof LANES;
+
+const isAspira = (id: string) => id.startsWith("ab") || id.startsWith("sk");
+const interval = (id: string) => (isAspira(id) ? ALBERTA_INTERVAL : CAMIS_INTERVAL);
 
 const today = () => new Date().toISOString().slice(0, 10);
-const isAlberta = (id: string) => id.startsWith("ab");
-const interval = (id: string) => (isAlberta(id) ? ALBERTA_INTERVAL : CAMIS_INTERVAL);
-
 let parkIds: string[] = [];
+const rr: Record<Lane, number> = { camis: 0, aspira: 0 };
 
 /** Epoch ms at which a park becomes due (0 = due now: never harvested or window rolled). */
 function dueAt(parkId: string, windowStart: string): number {
@@ -50,35 +58,42 @@ async function harvestOne(parkId: string, windowStart: string): Promise<void> {
   harvestDone(parkId, ok, sites, Date.now() - t, error);
 }
 
-async function tick(): Promise<void> {
+async function laneTick(lane: Lane): Promise<void> {
   try {
     if (parkIds.length === 0) parkIds = (await listCampgrounds()).map((c) => c.parkId);
+    const { prefixes } = LANES[lane];
     const windowStart = today();
     const now = Date.now();
-    // Pick the most-overdue due park; tie-break Camis (cheap) before Alberta.
+    // Round-robin within the lane's provinces (pick oldest-due of the next one).
     let pick: string | null = null;
-    let pickDue = Infinity;
-    let pickAb = true;
-    for (const id of parkIds) {
-      const due = dueAt(id, windowStart);
-      if (due > now) continue;
-      const ab = isAlberta(id);
-      if (due < pickDue || (due === pickDue && pickAb && !ab)) {
-        pick = id;
-        pickDue = due;
-        pickAb = ab;
+    for (let k = 0; k < prefixes.length; k++) {
+      const pre = prefixes[(rr[lane] + k) % prefixes.length];
+      let best: string | null = null;
+      let bestDue = Infinity;
+      for (const id of parkIds) {
+        if (!id.startsWith(pre)) continue;
+        const due = dueAt(id, windowStart);
+        if (due <= now && due < bestDue) {
+          bestDue = due;
+          best = id;
+        }
+      }
+      if (best) {
+        pick = best;
+        rr[lane] = (rr[lane] + k + 1) % prefixes.length;
+        break;
       }
     }
     if (pick) await harvestOne(pick, windowStart);
   } catch (e) {
-    console.warn("harvester tick error:", (e as Error).message);
+    console.warn(`harvester ${lane} error:`, (e as Error).message);
   }
-  scheduleNext();
+  schedule(lane);
 }
 
-function scheduleNext(): void {
+function schedule(lane: Lane): void {
   const jitter = 0.75 + Math.random() * 0.5; // ±25%
-  const t = setTimeout(tick, Math.round(SPACING_MS * jitter));
+  const t = setTimeout(() => laneTick(lane), Math.round(LANES[lane].spacing * jitter));
   if (typeof t === "object" && "unref" in t) t.unref();
 }
 
@@ -88,7 +103,9 @@ export function startHarvester(): void {
     return;
   }
   console.log(
-    `harvester: on (Camis every ${Math.round(CAMIS_INTERVAL / 3.6e6)}h, Alberta every ${Math.round(ALBERTA_INTERVAL / 3.6e6)}h, 1 park / ~${SPACING_MS / 1000}s)`,
+    `harvester: 2 lanes — camis(BC/PC) ~${LANES.camis.spacing / 1000}s, aspira(AB/SK) ~${LANES.aspira.spacing / 1000}s; ` +
+      `refresh camis ${Math.round(CAMIS_INTERVAL / 3.6e6)}h, aspira ${Math.round(ALBERTA_INTERVAL / 3.6e6)}h`,
   );
-  setTimeout(tick, 2000); // small delay after boot
+  setTimeout(() => laneTick("camis"), 1500);
+  setTimeout(() => laneTick("aspira"), 3000);
 }

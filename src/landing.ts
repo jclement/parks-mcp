@@ -197,7 +197,7 @@ export const LANDING_HTML = `<!doctype html>
       else { if(!map.hasLayer(e.m))e.m.addTo(map); e.m.setIcon(icon(e.p,st)); }
     }
     const lit=Object.keys(bulk).length;
-    const msg = prefs.start ? (lit ? "" : "harvesting… try shortly") : "set arrive date ↑ to light up";
+    const msg = prefs.start ? (lit < entries.length ? "filling availability… "+lit+"/"+entries.length+" ready" : "") : "set arrive date ↑ to light up";
     $("sub").textContent = msg || (parkCount + " parks");
     $("mhint").textContent = msg;
   }
