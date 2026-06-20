@@ -11,7 +11,16 @@ export const LANDING_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0b0f14">
 <title>Campground Map</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="64x64">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Campgrounds">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
   integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 <style>
@@ -83,10 +92,26 @@ export const LANDING_HTML = `<!doctype html>
 (async () => {
   const COLOR = { "Alberta Parks":"#f59e0b", "BC Parks":"#22c55e", "Parks Canada":"#ef4444" };
   const RING = { available:"#16a34a", unavailable:"#dc2626", checking:"#eab308" };
-  const AREA_CAP = 40;
+  const AREA_CAP = 100;
+  const AVAIL_TTL = 2 * 60 * 60 * 1000;  // 2h
   const $ = id => document.getElementById(id);
   const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-  const entries = [];  // { m, p, status }
+  const entries = [];          // { m, p, status }
+  const entryById = {};        // id -> entry
+
+  // ----- availability cache (localStorage, keyed by id+date+nights, 2h TTL) -----
+  let availCache = {};
+  try { availCache = JSON.parse(localStorage.getItem("pm_avail") || "{}"); } catch (e) {}
+  // prune expired on load
+  for (const k in availCache) if (Date.now() - (availCache[k].ts||0) > AVAIL_TTL) delete availCache[k];
+  const ckey = id => id + "|" + prefs.start + "|" + prefs.nights;
+  function cacheGet(id) { const e = availCache[ckey(id)]; return (e && Date.now()-e.ts < AVAIL_TTL) ? e : null; }
+  function cacheSet(id, available, siteCount) { availCache[ckey(id)] = { available, siteCount, ts: Date.now() };
+    try { localStorage.setItem("pm_avail", JSON.stringify(availCache)); } catch (e) {} }
+  function cachedStatus(id) { const e = cacheGet(id); return e ? (e.available ? "available" : "unavailable") : null; }
+  function applyCacheToMap() {
+    for (const e of entries) { const st = prefs.start ? cachedStatus(e.p.id) : null; e.status = st; e.m.setIcon(icon(e.p, st)); }
+  }
 
   // ----- preferred dates (persisted) -----
   const prefs = { start: localStorage.getItem("pm_start")||"", nights: +(localStorage.getItem("pm_nights")||2) };
@@ -101,19 +126,27 @@ export const LANDING_HTML = `<!doctype html>
     $("hint").textContent = prefs.start
       ? "Pan to an area, then \\u2018Check this area\\u2019, or click a pin."
       : "Set dates to check availability.";
-    for (const e of entries) if (e.status) { e.status = null; e.m.setIcon(icon(e.p, null)); }  // dates changed → clear rings
+    applyCacheToMap();  // dates changed → show this date's cached rings, clear the rest
   }
   dStart.onchange = save; dNights.onchange = save;
 
+  function markRing(id) { const e = entryById[id]; if (e) setStatus(e, cachedStatus(id)); }
+  function renderResult(out, d) {
+    out.className = "result";
+    out.innerHTML = d.available
+      ? '<b style="color:#16a34a">\\u2713 ' + d.siteCount + ' site' + (d.siteCount===1?'':'s') + ' open</b>'
+      : '<b style="color:#dc2626">\\u2715 none open</b>';
+  }
   window.pmCheck = async (id, btn) => {
     const out = btn.nextElementSibling;
+    const hit = cacheGet(id);
+    if (hit) { renderResult(out, hit); markRing(id); return; }   // cached → instant
     btn.disabled = true; out.textContent = "checking\\u2026"; out.className = "result muted";
     try {
       const r = await fetch("/api/availability?id=" + encodeURIComponent(id) + "&start=" + prefs.start + "&nights=" + prefs.nights);
       const d = await r.json(); if (!r.ok) throw 0;
-      out.innerHTML = d.available
-        ? '<b style="color:#16a34a">\\u2713 ' + d.siteCount + ' site' + (d.siteCount===1?'':'s') + ' open</b>'
-        : '<b style="color:#dc2626">\\u2715 none open</b>';
+      cacheSet(id, d.available, d.siteCount);   // persist + ring the map
+      renderResult(out, d); markRing(id);
     } catch (e) { out.innerHTML = '<span class="muted">check failed</span>'; }
     btn.disabled = false;
   };
@@ -155,21 +188,29 @@ export const LANDING_HTML = `<!doctype html>
     inView = inView.slice(0, AREA_CAP);
     if (!inView.length) { $("hint").textContent = "No campgrounds in view — pan/zoom to an area."; return; }
     $("areaBtn").disabled = true;
-    inView.forEach(e => setStatus(e, "checking"));
+    const total = inView.length;
     let done = 0, open = 0;
-    const tick = () => $("hint").textContent = "checked " + done + "/" + inView.length + extra + " \\u00b7 " + open + " open";
+    const tick = () => $("hint").textContent = "checked " + done + "/" + total + extra + " \\u00b7 " + open + " open";
+    // use cache where fresh; only fetch the rest
+    const todo = [];
+    for (const e of inView) {
+      const c = cacheGet(e.p.id);
+      if (c) { setStatus(e, c.available ? "available" : "unavailable"); if (c.available) open++; done++; }
+      else { setStatus(e, "checking"); todo.push(e); }
+    }
     tick();
     let i = 0;
     async function worker() {
-      while (i < inView.length) {
-        const e = inView[i++];
+      while (i < todo.length) {
+        const e = todo[i++];
         try {
           const r = await fetch("/api/availability?id=" + encodeURIComponent(e.p.id) + "&start=" + prefs.start + "&nights=" + prefs.nights);
           const d = await r.json();
+          if (r.ok) cacheSet(e.p.id, d.available, d.siteCount);
           const ok = r.ok && d.available;
           setStatus(e, ok ? "available" : "unavailable");
           if (ok) open++;
-        } catch (err) { setStatus(e, "unavailable"); }
+        } catch (err) { setStatus(e, null); }
         done++; tick();
       }
     }
@@ -200,7 +241,7 @@ export const LANDING_HTML = `<!doctype html>
           else { descEl.className = "desc muted"; descEl.textContent = "No description."; }
         }
       });
-      m.addTo(map); group.push(m); entries.push(entry);
+      m.addTo(map); group.push(m); entries.push(entry); entryById[p.id] = entry;
     }
     $("sub").textContent = d.pins.length.toLocaleString() + " of " + d.total.toLocaleString() + " campgrounds mapped";
     if (group.length) map.fitBounds(L.featureGroup(group).getBounds().pad(0.05));

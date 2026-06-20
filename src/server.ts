@@ -6,6 +6,33 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerTools } from "./mcp.ts";
 import { LANDING_HTML } from "./landing.ts";
 import { campgroundInfo, checkAvailability, listCampgrounds } from "./providers/registry.ts";
+import { APPLE_TOUCH_ICON_PNG, FAVICON_PNG, ICON_192_PNG, ICON_512_PNG, ICON_SVG } from "./icons.ts";
+
+const MANIFEST = JSON.stringify({
+  name: "Campground Map",
+  short_name: "Campgrounds",
+  description: "Camping availability across Alberta, BC, and Parks Canada",
+  start_url: "/",
+  scope: "/",
+  display: "standalone",
+  background_color: "#0b0f14",
+  theme_color: "#0b0f14",
+  icons: [
+    { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
+    { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
+    { src: "/favicon.svg", sizes: "any", type: "image/svg+xml" },
+  ],
+});
+
+const ICON_ROUTES: Record<string, { type: string; body: Buffer | string }> = {
+  "/manifest.webmanifest": { type: "application/manifest+json", body: MANIFEST },
+  "/favicon.svg": { type: "image/svg+xml", body: ICON_SVG },
+  "/favicon.ico": { type: "image/png", body: FAVICON_PNG },
+  "/icon-192.png": { type: "image/png", body: ICON_192_PNG },
+  "/icon-512.png": { type: "image/png", body: ICON_512_PNG },
+  "/apple-touch-icon.png": { type: "image/png", body: APPLE_TOUCH_ICON_PNG },
+  "/apple-touch-icon-precomposed.png": { type: "image/png", body: APPLE_TOUCH_ICON_PNG },
+};
 
 const PORT = Number(process.env.PORT ?? 3000);
 // The MCP endpoint lives at an unguessable path (the server is unauthenticated).
@@ -197,6 +224,11 @@ const httpServer = createServer(async (req, res) => {
     }
     if (url.pathname === "/robots.txt") {
       res.writeHead(200, { "content-type": "text/plain" }).end("User-agent: *\nDisallow: /\n");
+      return;
+    }
+    const iconRoute = ICON_ROUTES[url.pathname];
+    if (iconRoute) {
+      res.writeHead(200, { "content-type": iconRoute.type, "cache-control": "public, max-age=604800" }).end(iconRoute.body);
       return;
     }
     res.writeHead(404, { "content-type": "text/plain" }).end("Not found");
