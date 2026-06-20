@@ -1,5 +1,5 @@
 import { cached, ttlMs } from "../parks/cache.ts";
-import { addDaysISO, albertaProvider, computeVacancies } from "../parks/service.ts";
+import { addDaysISO, albertaProvider, computeVacancies, saskParksProvider } from "../parks/service.ts";
 import { bcParksProvider, parksCanadaProvider } from "./camis.ts";
 import { getCachedAvailability } from "../harvest.ts";
 import COORDS from "../data/coords.json";
@@ -26,7 +26,7 @@ function withCoords<T extends { parkId: string; lat?: number; lng?: number }>(it
   return c && c.length === 2 ? { ...item, lat: c[0], lng: c[1] } : item;
 }
 
-const PROVIDERS: Provider[] = [albertaProvider, bcParksProvider, parksCanadaProvider];
+const PROVIDERS: Provider[] = [albertaProvider, saskParksProvider, bcParksProvider, parksCanadaProvider];
 const byPrefix = new Map(PROVIDERS.map((p) => [p.prefix, p]));
 
 // Metadata barely changes; availability changes often.
