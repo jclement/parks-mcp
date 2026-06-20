@@ -182,16 +182,21 @@ export function getCachedAvailability(
 export function bulkAvailability(
   startISO: string,
   nights: number,
-): Record<string, { available: boolean; siteCount: number; stale: boolean }> {
+): Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> {
   if (!db) return {};
   const metas = db.query("SELECT parkId, windowStart, windowDays, updated FROM park_meta WHERE ok = 1").all() as {
     parkId: string; windowStart: string; windowDays: number | null; updated: number;
   }[];
-  const out: Record<string, { available: boolean; siteCount: number; stale: boolean }> = {};
+  const out: Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> = {};
   const siteStmt = db.query("SELECT bits FROM site_avail WHERE parkId = ?");
   for (const m of metas) {
     const offset = daysBetween(m.windowStart, startISO);
-    if (offset < 0 || offset + nights > (m.windowDays ?? HARVEST_DAYS)) continue; // not covered
+    if (offset < 0) continue; // date is in the past / before this harvest's window
+    if (offset + nights > (m.windowDays ?? HARVEST_DAYS)) {
+      // Harvested, but this date is deeper than the current window (still filling).
+      out[m.parkId] = { available: false, siteCount: 0, stale: false, pending: true };
+      continue;
+    }
     const rows = siteStmt.all(m.parkId) as { bits: Uint8Array }[];
     let count = 0;
     for (const r of rows) {

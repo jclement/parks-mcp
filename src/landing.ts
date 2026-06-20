@@ -58,6 +58,7 @@ export const LANDING_HTML = `<!doctype html>
   .ring{width:10px;height:10px;border-radius:50%;background:#64748b}
   .ring.g{box-shadow:0 0 0 2px #0b0f14,0 0 0 4px #16a34a}.ring.r{box-shadow:0 0 0 2px #0b0f14,0 0 0 4px #dc2626}
   .ring.o{box-shadow:0 0 0 2px #0b0f14,0 0 0 4px #f59e0b}
+  .ring.p{box-shadow:0 0 0 2px #0b0f14,0 0 0 4px #64748b}
   .mhint{position:absolute;z-index:1000;bottom:10px;left:50%;transform:translateX(-50%);background:rgba(13,20,32,.9);
     border:1px solid var(--line);color:var(--muted);font-size:11.5px;padding:4px 11px;border-radius:9px;display:none;white-space:nowrap}
   @media (max-width:560px){
@@ -134,6 +135,7 @@ export const LANDING_HTML = `<!doctype html>
   <span><i class="ring g"></i>open</span>
   <span><i class="ring r"></i>full</span>
   <span><i class="ring o"></i>stale</span>
+  <span><i class="ring p"></i>filling</span>
 </div></div>
 <div class="mhint" id="mhint"></div>
 
@@ -142,7 +144,7 @@ export const LANDING_HTML = `<!doctype html>
   <p>Campsite availability across <b>Alberta Parks</b>, <b>BC Parks</b>, and <b>Parks Canada</b> — including backcountry and trails like the West Coast Trail — on one map.</p>
   <ul>
     <li>Pick an <b>arrive date + nights</b> up top.</li>
-    <li>The map <b>lights up</b>: green = open, red = full, orange = a bit stale.</li>
+    <li>The map <b>lights up</b>: green = open, red = full, orange = a bit stale, grey = data still filling deeper for that date.</li>
     <li>Tick <b>Open only</b> to hide the full ones.</li>
     <li>Tap a pin for a <b>colored month view</b> + booking link.</li>
   </ul>
@@ -165,7 +167,8 @@ export const LANDING_HTML = `<!doctype html>
     <div><b>Avail</b>
       <span><i class="ring g"></i>open</span>
       <span><i class="ring r"></i>full</span>
-      <span><i class="ring o"></i>stale</span></div>
+      <span><i class="ring o"></i>stale</span>
+      <span><i class="ring p"></i>filling</span></div>
   </div>
   <div id="aboutSources"></div>
   <p class="muted" id="aboutRefresh" style="font-size:12.5px;margin-top:10px"></p>
@@ -179,7 +182,7 @@ export const LANDING_HTML = `<!doctype html>
 <script>
 (async () => {
   const COLOR={"Alberta Parks":"#f59e0b","Saskatchewan Parks":"#38bdf8","BC Parks":"#22c55e","Parks Canada":"#ef4444"};
-  const RING={available:"#16a34a",full:"#dc2626",stale:"#f59e0b"};
+  const RING={available:"#16a34a",full:"#dc2626",stale:"#f59e0b",pending:"#64748b"};
   const $=id=>document.getElementById(id);
   const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const iso=d=>d.toISOString().slice(0,10);
@@ -207,7 +210,7 @@ export const LANDING_HTML = `<!doctype html>
     const r=s+(ring?8:0);
     return L.divIcon({className:"",html:'<div style="'+style+'"></div>',iconSize:[r,r],iconAnchor:[s/2,s/2],popupAnchor:[0,-s/2]});
   }
-  function statusOf(p){const b=bulk[p.id]; if(!prefs.start||!b)return null; return b.stale?"stale":b.available?"available":"full";}
+  function statusOf(p){const b=bulk[p.id]; if(!prefs.start||!b)return null; if(b.pending)return "pending"; return b.stale?"stale":b.available?"available":"full";}
   function refreshPins(){
     for(const e of entries){
       const st=statusOf(e.p);
@@ -216,7 +219,7 @@ export const LANDING_HTML = `<!doctype html>
       if(hideIt){ if(map.hasLayer(e.m))e.m.remove(); }
       else { if(!map.hasLayer(e.m))e.m.addTo(map); e.m.setIcon(icon(e.p,st)); }
     }
-    const lit=Object.keys(bulk).length;
+    const lit=Object.keys(bulk).filter(k=>!bulk[k].pending).length;
     const msg = prefs.start ? (lit < entries.length ? "filling availability… "+lit+"/"+entries.length+" ready" : "") : "set arrive date ↑ to light up";
     $("sub").textContent = msg || (parkCount + " parks");
     $("mhint").textContent = msg;
