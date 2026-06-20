@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { QueueBlockedError, QueueBusyError } from "./parks/client.ts";
+import { recordMcp } from "./stats.ts";
 import {
   campgroundInfo,
   findVacancies,
@@ -50,6 +51,7 @@ export function registerTools(server: McpServer) {
       offset: z.number().int().min(0).optional().describe("Skip this many, for paging (default 0)"),
     },
     async ({ query, jurisdiction, limit, offset }) => {
+      recordMcp("list_campgrounds");
       try {
         const all = await listCampgrounds();
         const q = query?.trim().toLowerCase();
@@ -101,6 +103,7 @@ export function registerTools(server: McpServer) {
       limit: z.number().int().min(1).max(200).optional().describe("Max results (default 50)"),
     },
     async (args) => {
+      recordMcp("search_campgrounds");
       try {
         const hits = await searchCampgrounds(args);
         const results = hits.map((c) => ({
@@ -131,6 +134,7 @@ export function registerTools(server: McpServer) {
       nights: z.number().int().min(1).max(60).optional().describe("Span to cover (default 14)"),
     },
     async ({ parkId, startDate, nights }) => {
+      recordMcp("get_availability");
       try {
         return okCompact(await getAvailability(parkId, startDate, nights ?? 14));
       } catch (e) {
@@ -152,6 +156,7 @@ export function registerTools(server: McpServer) {
       nights: z.number().int().min(1).max(30).describe("Consecutive nights needed"),
     },
     async ({ parkId, startDate, endDate, nights }) => {
+      recordMcp("find_vacancies");
       try {
         const r = await findVacancies(parkId, startDate, endDate, nights);
         return ok({
@@ -177,6 +182,7 @@ export function registerTools(server: McpServer) {
       "coordinates or more than the name.",
     { parkId: PARK_ID },
     async ({ parkId }) => {
+      recordMcp("campground_info");
       try {
         return ok(await campgroundInfo(parkId));
       } catch (e) {

@@ -6,7 +6,7 @@
  * call. Backed by SQLite at <CACHE_DIR>/harvest.db (bind-mounted; survives restarts).
  */
 import { Database } from "bun:sqlite";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, statSync } from "node:fs";
 import { addDaysISO } from "./parks/service.ts";
 import type { SiteAvailability } from "./providers/types.ts";
 
@@ -228,6 +228,40 @@ export function harvestStatus(): { harvested: number; errors: number; oldest: nu
   const ok = db.query("SELECT COUNT(*) c, MIN(updated) mn, MAX(updated) mx FROM park_meta WHERE ok = 1").get() as { c: number; mn: number | null; mx: number | null };
   const err = db.query("SELECT COUNT(*) c FROM park_meta WHERE ok = 0").get() as { c: number };
   return { harvested: ok.c, errors: err.c, oldest: ok.mn, newest: ok.mx };
+}
+
+export interface ParkStatus {
+  parkId: string;
+  jurisdiction: string | null;
+  windowStart: string | null;
+  siteCount: number | null;
+  updated: number;
+  ok: number;
+  error: string | null;
+}
+export function parkStatuses(): ParkStatus[] {
+  if (!db) return [];
+  return db
+    .query("SELECT parkId, jurisdiction, windowStart, siteCount, updated, ok, error FROM park_meta ORDER BY updated DESC")
+    .all() as ParkStatus[];
+}
+
+export function dbSizes(): Record<string, number> {
+  const dir = process.env.CACHE_DIR;
+  if (!dir) return {};
+  const out: Record<string, number> = {};
+  for (const f of ["harvest.db", "harvest.db-wal", "cache.db", "cache.db-wal"]) {
+    try {
+      out[f] = statSync(`${dir}/${f}`).size;
+    } catch {
+      /* missing */
+    }
+  }
+  return out;
+}
+
+export function windowInfo(): { windowDays: number; today: string } {
+  return { windowDays: HARVEST_DAYS, today: new Date().toISOString().slice(0, 10) };
 }
 
 /** When was a park last harvested (ms epoch), or 0 if never / errored. */

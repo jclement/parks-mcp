@@ -44,17 +44,28 @@ export const LANDING_HTML = `<!doctype html>
   .ctl input#nights{width:54px}
   .ctl .hideb{display:flex;align-items:center;gap:6px;color:var(--ink);font-size:12px;cursor:pointer;padding-bottom:6px;text-transform:none;letter-spacing:0}
   .ctl .hideb input{width:16px;height:16px;accent-color:#22c55e}
-  .legend{position:absolute;z-index:1000;bottom:10px;left:50%;transform:translateX(-50%);
-    display:flex;gap:14px;flex-wrap:wrap;justify-content:center;background:var(--panel);border:1px solid var(--line);
-    border-radius:12px;padding:7px 13px;font-size:12px;color:#cbd5e1;backdrop-filter:blur(6px);max-width:96vw}
-  .legend span{display:flex;align-items:center;gap:5px;white-space:nowrap}
+  .ctl .info{cursor:pointer;color:var(--muted);border:1px solid var(--line);border-radius:50%;width:26px;height:26px;
+    font-size:14px;line-height:24px;text-align:center;margin-bottom:2px;flex:none}
+  .ctl .info:hover{color:var(--ink);border-color:#3a4d66}
+  .legend{position:absolute;z-index:1000;bottom:10px;left:12px;right:88px;text-align:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:8px 18px;backdrop-filter:blur(6px)}
+  .legend .keys{display:flex;gap:10px;flex-wrap:wrap;justify-content:space-around;align-items:center;font-size:12.5px;color:#cbd5e1}
+  .legend .keys span{display:flex;align-items:center;gap:5px;white-space:nowrap}
   .dot{width:11px;height:11px;border-radius:50%;box-shadow:0 0 0 1.5px #0b0f14}
   .dia{width:10px;height:10px;transform:rotate(45deg);box-shadow:0 0 0 1.5px #0b0f14}
   .ring{width:10px;height:10px;border-radius:50%;background:#64748b}
   .ring.g{box-shadow:0 0 0 2px #0b0f14,0 0 0 4px #16a34a}.ring.r{box-shadow:0 0 0 2px #0b0f14,0 0 0 4px #dc2626}
   .ring.o{box-shadow:0 0 0 2px #0b0f14,0 0 0 4px #f59e0b}
-  .hint{position:absolute;z-index:1000;bottom:46px;left:50%;transform:translateX(-50%);color:var(--muted);
-    font-size:11.5px;background:rgba(13,20,32,.85);padding:3px 10px;border-radius:8px}
+  .mhint{position:absolute;z-index:1000;bottom:10px;left:50%;transform:translateX(-50%);background:rgba(13,20,32,.9);
+    border:1px solid var(--line);color:var(--muted);font-size:11.5px;padding:4px 11px;border-radius:9px;display:none;white-space:nowrap}
+  @media (max-width:560px){
+    .legend{display:none}
+    .brand{display:none}
+    .bar{top:8px;left:8px;right:8px;gap:8px;justify-content:flex-end}
+    .mhint:not(:empty){display:block}
+  }
+  .keyrow{display:flex;flex-wrap:wrap;gap:9px 14px;font-size:12.5px;color:#cbd5e1;margin:8px 0 14px}
+  .keyrow span{display:flex;align-items:center;gap:5px}
   /* modal */
   .modal{position:fixed;inset:0;z-index:2000;background:#0008;display:none;align-items:center;justify-content:center;padding:18px}
   .modal.on{display:flex}
@@ -93,23 +104,24 @@ export const LANDING_HTML = `<!doctype html>
 <div class="bar">
   <div class="brand">
     <img src="/favicon.svg" alt="">
-    <div><b>Camp, Eh?</b> <span class="sub" id="sub">loading…</span></div>
-    <div class="info" id="aboutBtn" title="About">?</div>
+    <div class="meta"><b>Camp, Eh?</b> <span class="sub" id="sub">loading…</span></div>
   </div>
   <div class="ctl">
     <label>Arrive<input type="date" id="start"></label>
     <label>Nights<input type="number" id="nights" min="1" max="14" value="2"></label>
     <label class="hideb"><input type="checkbox" id="hideUnavail">Open only</label>
+    <div class="info" id="aboutBtn" title="About &amp; legend">?</div>
   </div>
 </div>
-<div class="legend">
+<div class="legend"><div class="keys">
   <span><i class="dot" style="background:#f59e0b"></i>AB</span>
+  <span><i class="dot" style="background:#38bdf8"></i>SK</span>
   <span><i class="dot" style="background:#22c55e"></i>BC</span>
   <span><i class="dot" style="background:#ef4444"></i>PC</span>
   <span><i class="dot" style="background:#cbd5e1"></i>front·<i class="dia" style="background:#cbd5e1"></i>back</span>
   <span><i class="ring g"></i>open <i class="ring r"></i>full <i class="ring o"></i>stale</span>
-</div>
-<div class="hint" id="hint"></div>
+</div></div>
+<div class="mhint" id="mhint"></div>
 
 <div class="modal" id="welcome"><div class="card">
   <h2><img src="/favicon.svg" alt="">Camp, Eh?</h2>
@@ -125,9 +137,20 @@ export const LANDING_HTML = `<!doctype html>
 
 <div class="modal" id="about"><div class="card">
   <h2><img src="/favicon.svg" alt="">About Camp, Eh?</h2>
-  <p>A read-only mirror of three reservation systems, refreshed on a schedule so lookups are instant. Availability can lag the official sites — always confirm before you book.</p>
+  <p>A read-only mirror of campground reservation systems, refreshed on a schedule so lookups are instant. Availability can lag the official sites — always confirm before you book.</p>
+  <div class="keyrow">
+    <span><i class="dot" style="background:#f59e0b"></i>Alberta</span>
+    <span><i class="dot" style="background:#22c55e"></i>BC</span>
+    <span><i class="dot" style="background:#ef4444"></i>Parks Canada</span>
+    <span><i class="dot" style="background:#38bdf8"></i>Saskatchewan</span>
+    <span><i class="dia" style="background:#cbd5e1"></i>backcountry</span>
+    <span><i class="ring g"></i>open</span>
+    <span><i class="ring r"></i>full</span>
+    <span><i class="ring o"></i>stale</span>
+  </div>
   <div id="aboutSources"></div>
   <p class="muted" id="aboutRefresh" style="font-size:12.5px;margin-top:10px"></p>
+  <p class="muted" style="font-size:11px;margin-top:6px">Map © OpenStreetMap contributors, © CARTO.</p>
   <button id="aboutClose">Close</button>
 </div></div>
 
@@ -135,14 +158,14 @@ export const LANDING_HTML = `<!doctype html>
   integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (async () => {
-  const COLOR={"Alberta Parks":"#f59e0b","BC Parks":"#22c55e","Parks Canada":"#ef4444"};
+  const COLOR={"Alberta Parks":"#f59e0b","Saskatchewan Parks":"#38bdf8","BC Parks":"#22c55e","Parks Canada":"#ef4444"};
   const RING={available:"#16a34a",full:"#dc2626",stale:"#f59e0b"};
   const $=id=>document.getElementById(id);
   const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const iso=d=>d.toISOString().slice(0,10);
   const addDays=(s,n)=>{const[y,m,d]=s.split("-").map(Number);const t=new Date(Date.UTC(y,m-1,d));t.setUTCDate(t.getUTCDate()+n);return iso(t)};
   const entries=[]; const entryById={};
-  let bulk={};
+  let bulk={}; let parkCount=0;
 
   // ----- prefs -----
   const prefs={start:localStorage.getItem("ce_start")||"",nights:+(localStorage.getItem("ce_nights")||2),hide:localStorage.getItem("ce_hide")==="1"};
@@ -152,7 +175,7 @@ export const LANDING_HTML = `<!doctype html>
     localStorage.setItem("ce_start",prefs.start);localStorage.setItem("ce_nights",prefs.nights);localStorage.setItem("ce_hide",prefs.hide?"1":"0");}
 
   // ----- map -----
-  const map=L.map("map",{zoomControl:false}).setView([54.5,-119],5);
+  const map=L.map("map",{zoomControl:false,attributionControl:false}).setView([54.5,-119],5);
   L.control.zoom({position:"bottomright"}).addTo(map);
   L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
 
@@ -174,7 +197,9 @@ export const LANDING_HTML = `<!doctype html>
       else { if(!map.hasLayer(e.m))e.m.addTo(map); e.m.setIcon(icon(e.p,st)); }
     }
     const lit=Object.keys(bulk).length;
-    $("hint").textContent = prefs.start ? (lit? "" : "harvesting availability… try again shortly") : "set an arrive date to light up the map";
+    const msg = prefs.start ? (lit ? "" : "harvesting… try shortly") : "set arrive date ↑ to light up";
+    $("sub").textContent = msg || (parkCount + " parks");
+    $("mhint").textContent = msg;
   }
   async function lightUp(){
     if(!prefs.start){bulk={};refreshPins();return;}
@@ -224,7 +249,7 @@ export const LANDING_HTML = `<!doctype html>
     }
     function descSet(el,info){ if(info&&info.description){el.className="desc";el.textContent=info.description;} else {el.className="desc muted";el.textContent="No description.";} }
     window.descSet=descSet;
-    $("sub").textContent=d.count+" parks";
+    parkCount=d.count; $("sub").textContent=parkCount+" parks";
     if(grp.length)map.fitBounds(L.featureGroup(grp).getBounds().pad(0.05));
     await lightUp();
   }catch(e){$("sub").textContent="data unavailable";}

@@ -7,7 +7,9 @@ import { registerTools } from "./mcp.ts";
 import { LANDING_HTML } from "./landing.ts";
 import { campgroundInfo, checkAvailability, listCampgrounds } from "./providers/registry.ts";
 import { startHarvester } from "./harvester.ts";
-import { bulkAvailability, calendar as harvestCalendar, harvestStatus, statusByJurisdiction } from "./harvest.ts";
+import { bulkAvailability, calendar as harvestCalendar, dbSizes, harvestStatus, parkStatuses, statusByJurisdiction, windowInfo } from "./harvest.ts";
+import { harvestEvents, mcpStats } from "./stats.ts";
+import { DASHBOARD_HTML } from "./dashboard.ts";
 import { APPLE_TOUCH_ICON_PNG, FAVICON_PNG, ICON_192_PNG, ICON_512_PNG, ICON_SVG } from "./icons.ts";
 
 const MANIFEST = JSON.stringify({
@@ -208,6 +210,36 @@ const httpServer = createServer(async (req, res) => {
       );
       return;
     }
+    if (url.pathname === "/api/dashboard") {
+      const all = await listCampgrounds();
+      const totalByJurisdiction: Record<string, number> = {};
+      for (const c of all) totalByJurisdiction[c.jurisdiction] = (totalByJurisdiction[c.jurisdiction] ?? 0) + 1;
+      const parks = parkStatuses();
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(
+        JSON.stringify({
+          totalParks: all.length,
+          totalByJurisdiction,
+          window: windowInfo(),
+          db: dbSizes(),
+          status: harvestStatus(),
+          bySource: statusByJurisdiction(),
+          errors: parks.filter((p) => !p.ok).map((p) => ({ parkId: p.parkId, error: p.error, updated: p.updated })),
+          harvest: harvestEvents,
+          mcp: mcpStats,
+          refresh: {
+            camisHours: Number(process.env.HARVEST_CAMIS_HOURS) || 4,
+            albertaHours: Number(process.env.HARVEST_ALBERTA_HOURS) || 24,
+            spacingSeconds: Number(process.env.HARVEST_SPACING_SECONDS) || 15,
+          },
+        }),
+      );
+      return;
+    }
+    if (url.pathname === "/dashboard") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(DASHBOARD_HTML);
+      return;
+    }
+
     if (url.pathname === "/api/about") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=120" }).end(
         JSON.stringify({

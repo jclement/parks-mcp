@@ -7,6 +7,7 @@
  */
 import { campgroundInfo, listCampgrounds, rawAvailability } from "./providers/registry.ts";
 import { HARVEST_DAYS, harvestEnabled, lastHarvest, storeError, storeHarvest } from "./harvest.ts";
+import { harvestDone, harvestStart } from "./stats.ts";
 
 const CAMIS_INTERVAL = (Number(process.env.HARVEST_CAMIS_HOURS) || 4) * 3600 * 1000; // default 4h
 const ALBERTA_INTERVAL = (Number(process.env.HARVEST_ALBERTA_HOURS) || 24) * 3600 * 1000; // 24h
@@ -26,11 +27,19 @@ function dueAt(parkId: string, windowStart: string): number {
 }
 
 async function harvestOne(parkId: string, windowStart: string): Promise<void> {
+  harvestStart(parkId);
+  const t = Date.now();
+  let ok = true;
+  let sites = 0;
+  let error: string | undefined;
   try {
     const r = await rawAvailability(parkId, windowStart, HARVEST_DAYS);
+    sites = r.sites.length;
     storeHarvest(parkId, windowStart, r.jurisdiction, r.bookingUrl, r.sites);
   } catch (e) {
-    storeError(parkId, (e as Error).message);
+    ok = false;
+    error = (e as Error).message;
+    storeError(parkId, error);
   }
   // Warm the description/info cache so popups don't fetch live (best-effort).
   try {
@@ -38,6 +47,7 @@ async function harvestOne(parkId: string, windowStart: string): Promise<void> {
   } catch {
     /* ignore */
   }
+  harvestDone(parkId, ok, sites, Date.now() - t, error);
 }
 
 async function tick(): Promise<void> {
