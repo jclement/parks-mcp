@@ -12,6 +12,9 @@ import type {
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36";
+// Parks Canada's Camis tenant mixes in non-camping reservations (shuttles, buses,
+// guided hikes, day-use, fishing, parking) — exclude those from the campground list.
+const NON_CAMPING = /\b(shuttle|bus|guided hikes?|guided tours?|day[- ]?use|fishing|parking|interpretive|orientation)\b/i;
 const DEFAULT_SPAN = 14;
 const MAX_NESTED_MAPS = 25;
 
@@ -47,7 +50,9 @@ class CamisProvider implements Provider {
 
   async list(): Promise<CampgroundListItem[]> {
     const locations = await this.resourceLocations();
-    return locations.map((r) => {
+    return locations
+      .filter((r) => !NON_CAMPING.test(localName(r.localizedValues)))
+      .map((r) => {
       const { lat, lng } = parseGps(r.gpsCoordinates);
       const mapId = String(r.rootMapId);
       const rlId = String(r.resourceLocationId);
