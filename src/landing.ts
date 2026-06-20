@@ -1,9 +1,9 @@
 // Mobile-friendly Leaflet map of campgrounds. Pins are colored by jurisdiction and
 // shaped by type (round = front-country, diamond = backcountry). Clicking a pin opens
-// a detail popup with copyable lat/long, a booking link, and a lazily-loaded
-// description. If preferred dates are set in the panel, popups gain a "check
-// availability" button (server-cached ~1h). Pulls /api/campgrounds, /api/campground,
-// and /api/availability.
+// a detail popup (copyable lat/long, booking link, lazy description, and — when dates
+// are set — a per-pin availability check). With dates set you can also sweep the
+// visible area: every pin in view is checked and ringed green (available) / red (full).
+// Pulls /api/campgrounds, /api/campground, /api/availability.
 export const LANDING_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -23,17 +23,22 @@ export const LANDING_HTML = `<!doctype html>
     backdrop-filter:blur(6px); box-shadow:0 10px 40px #0007; }
   .panel h1 { margin:0 0 2px; font-size:16px; }
   .panel .s { color:#8aa0b8; font-size:12.5px; }
-  .dates { display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; }
+  .dates { display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; align-items:flex-end; }
   .dates label { font-size:11px; color:#8aa0b8; display:flex; flex-direction:column; gap:3px; }
   .dates input { background:#0b0f14; color:#e8eef5; border:1px solid #2a3a4f; border-radius:8px;
     padding:6px 8px; font-size:14px; font-family:inherit; }
-  .dates input#dNights { width:62px; }
-  .hint { color:#64748b; font-size:11px; margin-top:6px; }
+  .dates input#dNights { width:58px; }
+  #areaBtn { cursor:pointer; background:#7c3aed; color:#fff; border:0; font-weight:600;
+    border-radius:9px; font-size:13px; padding:8px 11px; }
+  #areaBtn[disabled] { opacity:.45; cursor:default; }
+  .hint { color:#64748b; font-size:11px; margin-top:7px; min-height:14px; }
   .legend { display:flex; gap:13px; flex-wrap:wrap; margin-top:9px; font-size:12px; color:#cbd5e1; }
   .legend span { display:flex; align-items:center; gap:5px; }
   .dot { width:11px; height:11px; border-radius:50%; box-shadow:0 0 0 1.5px #0b0f14; }
   .dia { width:10px; height:10px; transform:rotate(45deg); box-shadow:0 0 0 1.5px #0b0f14; }
-  .pin { box-sizing:border-box; }
+  .ring { width:11px; height:11px; border-radius:50%; background:#94a3b8; }
+  .ring.g { box-shadow:0 0 0 2px #0b0f14, 0 0 0 4px #16a34a; }
+  .ring.r { box-shadow:0 0 0 2px #0b0f14, 0 0 0 4px #dc2626; }
   .leaflet-popup-content { margin:11px 13px; font-size:13px; line-height:1.45; min-width:218px; }
   .leaflet-popup-content b { font-size:14px; }
   .leaflet-popup-content .tag { display:inline-block; font-size:11px; color:#8aa0b8; margin-top:2px; }
@@ -43,7 +48,6 @@ export const LANDING_HTML = `<!doctype html>
     border:1px solid #e2e8f0; border-radius:8px; padding:4px 5px 4px 9px; }
   .leaflet-popup-content .ll button { cursor:pointer; background:#e2e8f0; color:#334155; border:0;
     border-radius:6px; font-size:11px; font-weight:600; padding:3px 9px; }
-  .leaflet-popup-content .ll button:hover { background:#cbd5e1; }
   .leaflet-popup-content .desc { color:#334155; margin-top:8px; max-height:150px; overflow:auto; }
   .leaflet-popup-content .muted { color:#94a3b8; }
   .leaflet-popup-content .avail { margin-top:10px; }
@@ -62,13 +66,15 @@ export const LANDING_HTML = `<!doctype html>
   <div class="dates">
     <label>Arrive<input type="date" id="dStart"></label>
     <label>Nights<input type="number" id="dNights" min="1" max="14" value="2"></label>
+    <button id="areaBtn" disabled>Check this area</button>
   </div>
-  <div class="hint" id="hint">Set dates to check availability from a pin.</div>
+  <div class="hint" id="hint">Set dates to check availability.</div>
   <div class="legend">
-    <span><i class="dot" style="background:#f59e0b"></i>Alberta</span>
+    <span><i class="dot" style="background:#f59e0b"></i>AB</span>
     <span><i class="dot" style="background:#22c55e"></i>BC</span>
-    <span><i class="dot" style="background:#ef4444"></i>Parks Canada</span>
+    <span><i class="dot" style="background:#ef4444"></i>PC</span>
     <span><i class="dot" style="background:#cbd5e1"></i>front · <i class="dia" style="background:#cbd5e1"></i>back</span>
+    <span><i class="ring g"></i>open · <i class="ring r"></i>full</span>
   </div>
 </div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -76,8 +82,11 @@ export const LANDING_HTML = `<!doctype html>
 <script>
 (async () => {
   const COLOR = { "Alberta Parks":"#f59e0b", "BC Parks":"#22c55e", "Parks Canada":"#ef4444" };
+  const RING = { available:"#16a34a", unavailable:"#dc2626", checking:"#eab308" };
+  const AREA_CAP = 40;
   const $ = id => document.getElementById(id);
   const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const entries = [];  // { m, p, status }
 
   // ----- preferred dates (persisted) -----
   const prefs = { start: localStorage.getItem("pm_start")||"", nights: +(localStorage.getItem("pm_nights")||2) };
@@ -88,19 +97,20 @@ export const LANDING_HTML = `<!doctype html>
     prefs.start = dStart.value;
     prefs.nights = Math.max(1, Math.min(14, +dNights.value || 1)); dNights.value = prefs.nights;
     localStorage.setItem("pm_start", prefs.start); localStorage.setItem("pm_nights", prefs.nights);
+    $("areaBtn").disabled = !prefs.start;
     $("hint").textContent = prefs.start
-      ? "Click a pin, then \\u2018check availability\\u2019 for " + prefs.start + " (" + prefs.nights + "n)."
-      : "Set dates to check availability from a pin.";
+      ? "Pan to an area, then \\u2018Check this area\\u2019, or click a pin."
+      : "Set dates to check availability.";
+    for (const e of entries) if (e.status) { e.status = null; e.m.setIcon(icon(e.p, null)); }  // dates changed → clear rings
   }
-  dStart.onchange = save; dNights.onchange = save; save();
+  dStart.onchange = save; dNights.onchange = save;
 
   window.pmCheck = async (id, btn) => {
     const out = btn.nextElementSibling;
     btn.disabled = true; out.textContent = "checking\\u2026"; out.className = "result muted";
     try {
       const r = await fetch("/api/availability?id=" + encodeURIComponent(id) + "&start=" + prefs.start + "&nights=" + prefs.nights);
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error||"error");
+      const d = await r.json(); if (!r.ok) throw 0;
       out.innerHTML = d.available
         ? '<b style="color:#16a34a">\\u2713 ' + d.siteCount + ' site' + (d.siteCount===1?'':'s') + ' open</b>'
         : '<b style="color:#dc2626">\\u2715 none open</b>';
@@ -113,11 +123,15 @@ export const LANDING_HTML = `<!doctype html>
   L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
     { maxZoom:19, attribution:'&copy; OpenStreetMap &copy; CARTO' }).addTo(map);
 
-  function icon(p) {
+  function icon(p, status) {
     const c = COLOR[p.j] || "#64748b", back = p.t === "backcountry", s = back ? 12 : 13;
-    const style = "width:" + s + "px;height:" + s + "px;background:" + c + ";border:1.5px solid #0b0f14;" + (back?"":"border-radius:50%;");
-    return L.divIcon({ className:"", html:'<div class="pin' + (back?" bc-shape":"") + '" style="' + style + (back?"transform:rotate(45deg);":"") + '"></div>',
-      iconSize:[s,s], iconAnchor:[s/2,s/2], popupAnchor:[0,-s/2] });
+    const ring = status && RING[status];
+    const shadow = ring ? "box-shadow:0 0 0 1.5px #0b0f14,0 0 0 4px " + ring + ";" : "";
+    const style = "width:" + s + "px;height:" + s + "px;background:" + c + ";border:1.5px solid #0b0f14;" +
+      (back ? "transform:rotate(45deg);" : "border-radius:50%;") + shadow;
+    const r = s + (ring ? 8 : 0);
+    return L.divIcon({ className:"", html:'<div style="' + style + '"></div>',
+      iconSize:[r,r], iconAnchor:[s/2,s/2], popupAnchor:[0,-s/2] });
   }
   function popupHtml(p, info) {
     const ll = p.lat.toFixed(5) + ", " + p.lng.toFixed(5);
@@ -131,27 +145,62 @@ export const LANDING_HTML = `<!doctype html>
       '<a class="book" href="' + esc(p.url) + '" target="_blank" rel="noopener">Book / full availability \\u2192</a>' + avail + desc;
   }
 
+  // ----- sweep the visible area -----
+  function setStatus(e, status) { e.status = status; e.m.setIcon(icon(e.p, status)); }
+  async function checkArea() {
+    if (!prefs.start) return;
+    const b = map.getBounds();
+    let inView = entries.filter(e => b.contains(e.m.getLatLng()));
+    const extra = inView.length > AREA_CAP ? " (first " + AREA_CAP + " of " + inView.length + "; zoom in for more)" : "";
+    inView = inView.slice(0, AREA_CAP);
+    if (!inView.length) { $("hint").textContent = "No campgrounds in view — pan/zoom to an area."; return; }
+    $("areaBtn").disabled = true;
+    inView.forEach(e => setStatus(e, "checking"));
+    let done = 0, open = 0;
+    const tick = () => $("hint").textContent = "checked " + done + "/" + inView.length + extra + " \\u00b7 " + open + " open";
+    tick();
+    let i = 0;
+    async function worker() {
+      while (i < inView.length) {
+        const e = inView[i++];
+        try {
+          const r = await fetch("/api/availability?id=" + encodeURIComponent(e.p.id) + "&start=" + prefs.start + "&nights=" + prefs.nights);
+          const d = await r.json();
+          const ok = r.ok && d.available;
+          setStatus(e, ok ? "available" : "unavailable");
+          if (ok) open++;
+        } catch (err) { setStatus(e, "unavailable"); }
+        done++; tick();
+      }
+    }
+    await Promise.all(Array.from({ length: 4 }, worker));
+    $("areaBtn").disabled = false;
+  }
+  $("areaBtn").onclick = checkArea;
+
   try {
     const r = await fetch("/api/campgrounds"); if (!r.ok) throw new Error("map data unavailable");
     const d = await r.json();
     const group = [];
     for (const p of d.pins) {
-      const m = L.marker([p.lat, p.lng], { icon: icon(p) }).bindPopup(popupHtml(p));
+      const m = L.marker([p.lat, p.lng], { icon: icon(p, null) }).bindPopup(popupHtml(p));
+      const entry = { m, p, status: null };
       m.on("popupopen", async () => {
-        m.setPopupContent(popupHtml(p, m._info));   // rebuild with current prefs
+        m.setPopupContent(popupHtml(p, m._info));
         if (m._info === undefined) {
           try { const ir = await fetch("/api/campground?id=" + encodeURIComponent(p.id)); m._info = ir.ok ? await ir.json() : null; }
           catch { m._info = null; }
           if (map.hasLayer(m) && m.isPopupOpen()) m.setPopupContent(popupHtml(p, m._info));
         }
       });
-      m.addTo(map); group.push(m);
+      m.addTo(map); group.push(m); entries.push(entry);
     }
     $("sub").textContent = d.pins.length.toLocaleString() + " of " + d.total.toLocaleString() + " campgrounds mapped";
     if (group.length) map.fitBounds(L.featureGroup(group).getBounds().pad(0.05));
   } catch (e) {
     $("sub").textContent = "Map data unavailable — " + (e.message || e);
   }
+  save();
 })();
 </script>
 </body>
