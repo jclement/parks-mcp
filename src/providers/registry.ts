@@ -1,7 +1,14 @@
 import { cached, ttlMs } from "../parks/cache.ts";
-import { albertaProvider } from "../parks/service.ts";
+import { addDaysISO, albertaProvider, computeVacancies } from "../parks/service.ts";
 import { bcParksProvider, parksCanadaProvider } from "./camis.ts";
+import { getCachedAvailability } from "../harvest.ts";
 import COORDS from "../data/coords.json";
+
+function daysBetween(a: string, b: string): number {
+  const [y1, m1, d1] = a.split("-").map(Number);
+  const [y2, m2, d2] = b.split("-").map(Number);
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+}
 import type {
   AvailabilityWithMeta,
   CampgroundInfo,
@@ -54,15 +61,27 @@ export function listCampgrounds(): Promise<CampgroundListItem[]> {
   });
 }
 
+/** Uncached availability straight from the provider — used by the harvester. */
+export async function rawAvailability(
+  parkId: string,
+  startISO: string,
+  nights: number,
+): Promise<AvailabilityWithMeta> {
+  const { provider, localId } = route(parkId);
+  return { ...(await provider.availability(localId, startISO, nights)), parkId };
+}
+
 export function getAvailability(
   parkId: string,
   startISO: string,
   nights: number,
 ): Promise<AvailabilityWithMeta> {
+  const span = Math.max(nights, 14);
+  const hit = getCachedAvailability(parkId, startISO, span);
+  if (hit) return Promise.resolve({ ...hit, source: "harvest" } as AvailabilityWithMeta);
   return cached(`avail:${parkId}:${startISO}:${nights}`, AVAILABILITY_TTL, async () => {
-    const { provider, localId } = route(parkId);
-    const r = await provider.availability(localId, startISO, nights);
-    return { ...r, parkId };
+    const r = await rawAvailability(parkId, startISO, nights);
+    return { ...r, source: "live" } as AvailabilityWithMeta;
   });
 }
 
@@ -72,10 +91,22 @@ export function findVacancies(
   endISO: string,
   nights: number,
 ): Promise<VacancyResult> {
+  const span = daysBetween(startISO, endISO) + nights + 1;
+  const hit = getCachedAvailability(parkId, startISO, span);
+  if (hit) {
+    const vacancies = computeVacancies(hit.sites, startISO, endISO, nights);
+    return Promise.resolve({
+      parkId,
+      jurisdiction: hit.jurisdiction,
+      bookingUrl: hit.bookingUrl,
+      vacancies,
+      source: "harvest",
+      stale: hit.stale,
+    } as VacancyResult);
+  }
   return cached(`vac:${parkId}:${startISO}:${endISO}:${nights}`, AVAILABILITY_TTL, async () => {
     const { provider, localId } = route(parkId);
-    const r = await provider.vacancies(localId, startISO, endISO, nights);
-    return { ...r, parkId };
+    return { ...(await provider.vacancies(localId, startISO, endISO, nights)), parkId, source: "live" } as VacancyResult;
   });
 }
 
@@ -155,9 +186,10 @@ export interface AvailabilityCheck {
   siteCount: number;
   jurisdiction: string;
   bookingUrl: string;
+  stale?: boolean;
 }
 
-/** Is a stay of `nights` starting on `startISO` available at this campground? (1h cache) */
+/** Is a stay of `nights` starting on `startISO` available at this campground? */
 export function checkAvailability(
   parkId: string,
   startISO: string,
@@ -170,6 +202,7 @@ export function checkAvailability(
       siteCount: r.vacancies.length,
       jurisdiction: r.jurisdiction,
       bookingUrl: r.bookingUrl,
+      stale: r.stale,
     };
   });
 }

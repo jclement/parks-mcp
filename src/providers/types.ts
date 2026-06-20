@@ -21,6 +21,10 @@ export interface AvailabilityWithMeta extends AvailabilityResult {
   parkId: string;
   jurisdiction: string;
   bookingUrl: string;
+  /** Where the data came from + freshness when served from the harvest. */
+  source?: "harvest" | "live";
+  stale?: boolean;
+  harvestedAt?: number;
 }
 
 export interface Vacancy {
@@ -39,6 +43,8 @@ export interface VacancyResult {
   jurisdiction: string;
   bookingUrl: string;
   vacancies: Vacancy[];
+  source?: "harvest" | "live";
+  stale?: boolean;
 }
 
 export interface CampgroundInfo {

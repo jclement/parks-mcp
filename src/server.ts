@@ -6,6 +6,8 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerTools } from "./mcp.ts";
 import { LANDING_HTML } from "./landing.ts";
 import { campgroundInfo, checkAvailability, listCampgrounds } from "./providers/registry.ts";
+import { startHarvester } from "./harvester.ts";
+import { bulkAvailability, calendar as harvestCalendar, harvestStatus, statusByJurisdiction } from "./harvest.ts";
 import { APPLE_TOUCH_ICON_PNG, FAVICON_PNG, ICON_192_PNG, ICON_512_PNG, ICON_SVG } from "./icons.ts";
 
 const MANIFEST = JSON.stringify({
@@ -183,6 +185,40 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/availability-bulk") {
+      const start = url.searchParams.get("start") || "";
+      const nights = Math.max(1, Math.min(30, Number(url.searchParams.get("nights")) || 1));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "bad start date" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=300" }).end(
+        JSON.stringify({ start, nights, parks: bulkAvailability(start, nights) }),
+      );
+      return;
+    }
+    if (url.pathname === "/api/calendar") {
+      const id = url.searchParams.get("id") || "";
+      const start = url.searchParams.get("start") || new Date().toISOString().slice(0, 10);
+      const nights = Math.max(1, Math.min(30, Number(url.searchParams.get("nights")) || 1));
+      const days = Math.max(7, Math.min(90, Number(url.searchParams.get("days")) || 42));
+      const cal = harvestCalendar(id, start, nights, days);
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=300" }).end(
+        JSON.stringify(cal ? { harvested: true, ...cal } : { harvested: false, cells: [] }),
+      );
+      return;
+    }
+    if (url.pathname === "/api/about") {
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=120" }).end(
+        JSON.stringify({
+          status: harvestStatus(),
+          bySource: statusByJurisdiction(),
+          refresh: { camisHours: Number(process.env.HARVEST_CAMIS_HOURS) || 4, albertaHours: Number(process.env.HARVEST_ALBERTA_HOURS) || 24, windowDays: 90 },
+        }),
+      );
+      return;
+    }
+
     if (url.pathname === "/api/campground") {
       const id = url.searchParams.get("id") || "";
       try {
@@ -240,4 +276,5 @@ const httpServer = createServer(async (req, res) => {
 
 httpServer.listen(PORT, () => {
   console.log(`parks-mcp listening on :${PORT}  (MCP at ${MCP_PATH})`);
+  startHarvester();
 });
