@@ -186,11 +186,18 @@ export const LANDING_HTML = `<!doctype html>
       const m = L.marker([p.lat, p.lng], { icon: icon(p, null) }).bindPopup(popupHtml(p));
       const entry = { m, p, status: null };
       m.on("popupopen", async () => {
+        // Rebuild once synchronously so the popup reflects the current prefs/info.
         m.setPopupContent(popupHtml(p, m._info));
-        if (m._info === undefined) {
-          try { const ir = await fetch("/api/campground?id=" + encodeURIComponent(p.id)); m._info = ir.ok ? await ir.json() : null; }
-          catch { m._info = null; }
-          if (map.hasLayer(m) && m.isPopupOpen()) m.setPopupContent(popupHtml(p, m._info));
+        if (m._info !== undefined) return;
+        try { const ir = await fetch("/api/campground?id=" + encodeURIComponent(p.id)); m._info = ir.ok ? await ir.json() : null; }
+        catch { m._info = null; }
+        // Update ONLY the description node in place — do NOT rebuild the popup, or
+        // we'd clobber an availability check the user may have run meanwhile.
+        const el = m.getPopup() && m.getPopup().getElement();
+        const descEl = el && el.querySelector(".desc");
+        if (descEl) {
+          if (m._info && m._info.description) { descEl.className = "desc"; descEl.textContent = m._info.description; }
+          else { descEl.className = "desc muted"; descEl.textContent = "No description."; }
         }
       });
       m.addTo(map); group.push(m); entries.push(entry);
