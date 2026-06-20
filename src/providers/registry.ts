@@ -25,6 +25,8 @@ const byPrefix = new Map(PROVIDERS.map((p) => [p.prefix, p]));
 // Metadata barely changes; availability changes often.
 const METADATA_TTL = ttlMs("CAMPGROUND_CACHE_TTL", 7 * 24 * 60 * 60); // 7 days
 const AVAILABILITY_TTL = ttlMs("AVAILABILITY_CACHE_TTL", 5 * 60); // 5 minutes
+// Map "check availability" clicks are cached longer so clicking around is cheap.
+const MAP_AVAILABILITY_TTL = ttlMs("MAP_AVAILABILITY_CACHE_TTL", 60 * 60); // 1 hour
 
 function route(parkId: string): { provider: Provider; localId: string } {
   const idx = parkId.indexOf(":");
@@ -146,6 +148,30 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
     Math.sin(dLat / 2) ** 2 +
     Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
   return Math.round(2 * R * Math.asin(Math.sqrt(a)) * 10) / 10;
+}
+
+export interface AvailabilityCheck {
+  available: boolean;
+  siteCount: number;
+  jurisdiction: string;
+  bookingUrl: string;
+}
+
+/** Is a stay of `nights` starting on `startISO` available at this campground? (1h cache) */
+export function checkAvailability(
+  parkId: string,
+  startISO: string,
+  nights: number,
+): Promise<AvailabilityCheck> {
+  return cached(`mapavail:${parkId}:${startISO}:${nights}`, MAP_AVAILABILITY_TTL, async () => {
+    const r = await findVacancies(parkId, startISO, startISO, nights);
+    return {
+      available: r.vacancies.length > 0,
+      siteCount: r.vacancies.length,
+      jurisdiction: r.jurisdiction,
+      bookingUrl: r.bookingUrl,
+    };
+  });
 }
 
 export function campgroundInfo(parkId: string): Promise<CampgroundInfo> {

@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerTools } from "./mcp.ts";
 import { LANDING_HTML } from "./landing.ts";
-import { campgroundInfo, listCampgrounds } from "./providers/registry.ts";
+import { campgroundInfo, checkAvailability, listCampgrounds } from "./providers/registry.ts";
 
 const PORT = Number(process.env.PORT ?? 3000);
 // The MCP endpoint lives at an unguessable path (the server is unauthenticated).
@@ -14,8 +14,26 @@ const MCP_PATH = process.env.MCP_PATH ?? "/burrow/9f3a7c2e1d/mcp";
 // Active sessions: an `initialize` mints one; later requests carry mcp-session-id.
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
+const INSTRUCTIONS = `Camping reservation search across Alberta Parks, BC Parks, and Parks Canada
+(includes backcountry zones and trails like the West Coast Trail).
+
+Typical flow:
+1. Find the campground's parkId with search_campgrounds (best when the user names a
+   place/area — supports text and "near <place> within Xkm") or list_campgrounds
+   (browse with jurisdiction/query filters; it is large, so always filter/page).
+2. Pass that parkId to get_availability (per-site open dates) or find_vacancies
+   (sites open for N consecutive nights in a date range), or campground_info
+   (description + coordinates).
+
+parkId is provider-prefixed and opaque — always use the value returned by a search/
+list call verbatim; never construct or guess one. Dates are ISO YYYY-MM-DD. This is
+read-only: it reports availability and booking-page URLs but does not make bookings.`;
+
 function buildServer(): McpServer {
-  const server = new McpServer({ name: "alberta-parks", version: "0.1.0" });
+  const server = new McpServer(
+    { name: "parks-camping", version: "0.2.0" },
+    { instructions: INSTRUCTIONS },
+  );
   registerTools(server);
   return server;
 }
@@ -116,6 +134,24 @@ const httpServer = createServer(async (req, res) => {
         );
       } catch (e) {
         res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/availability") {
+      const id = url.searchParams.get("id") || "";
+      const start = url.searchParams.get("start") || "";
+      const nights = Math.max(1, Math.min(30, Number(url.searchParams.get("nights")) || 1));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "bad start date" }));
+        return;
+      }
+      try {
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=600" }).end(
+          JSON.stringify(await checkAvailability(id, start, nights)),
+        );
+      } catch (e) {
+        res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
       }
       return;
     }

@@ -214,6 +214,25 @@ function absUrl(href: string): string {
   return `https://shop.albertaparks.ca${href.startsWith("/") ? "" : "/"}${href}`;
 }
 
+/** Strip HTML tags + entities from a description, collapse whitespace, cap length. */
+export function cleanText(s?: string, maxLen = 1200): string | undefined {
+  if (!s) return undefined;
+  let t = s
+    .replace(/<\s*(br|\/p|\/div|li)\s*\/?\s*>/gi, " ") // block breaks → space
+    .replace(/<[^>]+>/g, "") // remaining tags
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&#39;|&rsquo;|&lsquo;|&apos;/gi, "'")
+    .replace(/&quot;|&ldquo;|&rdquo;/gi, '"')
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&[a-z]+;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (t.length > maxLen) t = t.slice(0, maxLen - 1).trimEnd() + "…";
+  return t || undefined;
+}
+
 /** A backcountry zone (e.g. Point) within an area's trip-permit calendar. */
 export interface BackcountryZone {
   zone: string;
@@ -273,11 +292,12 @@ export function parseFacilityDetails(html: string): FacilityDetails {
     decode(root.querySelector("h1")?.text || "") ||
     decode((root.querySelector("title")?.text || "").replace(/\s*\|.*$/, ""));
 
-  const desc =
-    decode(root.querySelector(".facility_description")?.text || "") ||
-    decode(root.querySelector("#facilityDescription")?.text || "") ||
-    decode(root.querySelector('meta[name="description"]')?.getAttribute("content") || "") ||
-    undefined;
+  const desc = cleanText(
+    root.querySelector(".facility_description")?.innerHTML ||
+      root.querySelector("#facilityDescription")?.innerHTML ||
+      root.querySelector('meta[name="description"]')?.getAttribute("content") ||
+      undefined,
+  );
 
   const text = root.text;
   const latM = text.match(/Latitude:\s*(-?\d{1,3}\.\d+)/i);

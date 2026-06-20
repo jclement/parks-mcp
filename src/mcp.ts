@@ -14,6 +14,10 @@ const ISO = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "date must be ISO YYYY-MM-DD
 function ok(data: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
 }
+// Compact (unindented) for potentially-large payloads, to stay under tool-result limits.
+function okCompact(data: unknown) {
+  return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
+}
 function fail(e: unknown) {
   const msg =
     e instanceof QueueBlockedError || e instanceof QueueBusyError
@@ -29,16 +33,46 @@ const PARK_ID = z
 export function registerTools(server: McpServer) {
   server.tool(
     "list_campgrounds",
-    "List all bookable units across Alberta Parks, BC Parks, and Parks Canada — " +
-      "front-country campgrounds, backcountry zones (e.g. Point), and trails (e.g. " +
-      "West Coast Trail) — each with a provider-prefixed parkId, name, jurisdiction, " +
-      "type, region, coordinates, and bookingUrl. Call this first to get the parkId; " +
-      "the availability tools accept any of them transparently. This is a large list " +
-      "(hundreds of parks); filter by name/jurisdiction/region as needed.",
-    {},
-    async () => {
+    "Browse bookable campgrounds across Alberta Parks, BC Parks, and Parks Canada " +
+      "(front-country, backcountry zones, and trails like West Coast Trail). Returns " +
+      "compact entries { parkId, name, jurisdiction, type, region }. There are ~387 " +
+      "campgrounds, so ALWAYS narrow it down: pass `jurisdiction` and/or a `query` " +
+      "(name/region substring), and use `limit`/`offset` to page through the rest. " +
+      "To find campgrounds near a place, use `search_campgrounds` instead. Take the " +
+      "returned `parkId` to get_availability / find_vacancies / campground_info.",
+    {
+      query: z.string().optional().describe("Case-insensitive name/region substring, e.g. 'lake', 'Kananaskis'"),
+      jurisdiction: z
+        .enum(["Alberta Parks", "BC Parks", "Parks Canada"])
+        .optional()
+        .describe("Restrict to one park system"),
+      limit: z.number().int().min(1).max(500).optional().describe("Max entries to return (default 100)"),
+      offset: z.number().int().min(0).optional().describe("Skip this many, for paging (default 0)"),
+    },
+    async ({ query, jurisdiction, limit, offset }) => {
       try {
-        return ok(await listCampgrounds());
+        const all = await listCampgrounds();
+        const q = query?.trim().toLowerCase();
+        const filtered = all.filter(
+          (c) =>
+            (!jurisdiction || c.jurisdiction === jurisdiction) &&
+            (!q || `${c.name} ${c.region ?? ""}`.toLowerCase().includes(q)),
+        );
+        const off = offset ?? 0;
+        const page = filtered.slice(off, off + (limit ?? 100)).map((c) => ({
+          parkId: c.parkId,
+          name: c.name,
+          jurisdiction: c.jurisdiction,
+          type: c.type,
+          ...(c.region ? { region: c.region } : {}),
+        }));
+        return okCompact({
+          total: filtered.length,
+          returned: page.length,
+          offset: off,
+          nextOffset: off + page.length < filtered.length ? off + page.length : null,
+          campgrounds: page,
+        });
       } catch (e) {
         return fail(e);
       }
@@ -69,7 +103,16 @@ export function registerTools(server: McpServer) {
     async (args) => {
       try {
         const hits = await searchCampgrounds(args);
-        return ok({ count: hits.length, results: hits });
+        const results = hits.map((c) => ({
+          parkId: c.parkId,
+          name: c.name,
+          jurisdiction: c.jurisdiction,
+          type: c.type,
+          ...(c.region ? { region: c.region } : {}),
+          ...(c.lat != null ? { lat: c.lat, lng: c.lng } : {}),
+          ...(c.distanceKm != null ? { distanceKm: c.distanceKm } : {}),
+        }));
+        return okCompact({ count: results.length, results });
       } catch (e) {
         return fail(e);
       }
@@ -89,7 +132,7 @@ export function registerTools(server: McpServer) {
     },
     async ({ parkId, startDate, nights }) => {
       try {
-        return ok(await getAvailability(parkId, startDate, nights ?? 14));
+        return okCompact(await getAvailability(parkId, startDate, nights ?? 14));
       } catch (e) {
         return fail(e);
       }

@@ -1,4 +1,5 @@
 import { addDaysISO, computeVacancies } from "../parks/service.ts";
+import { cleanText } from "../parks/parse.ts";
 import type {
   AvailabilityResult,
   AvailabilityWithMeta,
@@ -195,7 +196,7 @@ function localName(lv?: RawLocalized[]): string {
 }
 function localDescription(lv?: RawLocalized[]): string | undefined {
   const v = lv?.find((x) => x.cultureName?.startsWith("en")) ?? lv?.[0];
-  return v?.description?.trim() || undefined;
+  return cleanText(v?.description);
 }
 
 function siteLabel(siteId: string): string {
