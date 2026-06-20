@@ -1,5 +1,8 @@
 import { parse, type HTMLElement } from "node-html-parser";
 
+/** Default shop host for resolving relative photo/site URLs (Alberta). */
+const DEFAULT_BASE = "https://shop.albertaparks.ca";
+
 /** A campground (facility) as listed on the camping search page. */
 export interface Campground {
   parkId: string;
@@ -71,7 +74,7 @@ function parkNameFromTitle(title: string, siteTypeWords: string): string {
  * into a list of campgrounds. Names come from `a.facility_link[title]`; per-site-type
  * counts from the `site_type_item_arrow_right` links.
  */
-export function parseCampgrounds(html: string): Campground[] {
+export function parseCampgrounds(html: string, base: string = DEFAULT_BASE): Campground[] {
   const root = parse(html);
   const byId = new Map<string, Campground>();
 
@@ -114,9 +117,7 @@ export function parseCampgrounds(html: string): Campground[] {
     const src = img.getAttribute("pbsrc") || "";
     const m = src.match(/pid(\d{5,7})/);
     if (m && byId.has(m[1]) && !byId.get(m[1])!.photo) {
-      byId.get(m[1])!.photo = src.startsWith("http")
-        ? src
-        : `https://shop.albertaparks.ca${src}`;
+      byId.get(m[1])!.photo = src.startsWith("http") ? src : `${base}${src}`;
     }
   }
 
@@ -137,7 +138,11 @@ function addDaysISO(iso: string, days: number): string {
  * such a cell means the site is not available that day. The site roster + labels
  * come from `.siteListLabel` anchors; park slug from the campsiteDetails href.
  */
-export function parseAvailability(html: string, windowStart: string): AvailabilityResult {
+export function parseAvailability(
+  html: string,
+  windowStart: string,
+  base: string = DEFAULT_BASE,
+): AvailabilityResult {
   const root = parse(html);
 
   // Roster: dedupe by siteId (the grid is rendered twice in some layouts).
@@ -156,7 +161,7 @@ export function parseAvailability(html: string, windowStart: string): Availabili
     }
     const text = decode(a?.text || label.text || "");
     const loop = nearestLoop(label);
-    const siteUrl = href ? absUrl(decode(href)) : undefined;
+    const siteUrl = href ? absUrl(decode(href), base) : undefined;
     if (!roster.has(siteId)) {
       roster.set(siteId, { siteId, label: text, loop, siteUrl, available: [] });
     }
@@ -209,9 +214,9 @@ function nearestLoop(el: HTMLElement): string | undefined {
   return undefined;
 }
 
-function absUrl(href: string): string {
+function absUrl(href: string, base: string = DEFAULT_BASE): string {
   if (href.startsWith("http")) return href;
-  return `https://shop.albertaparks.ca${href.startsWith("/") ? "" : "/"}${href}`;
+  return `${base}${href.startsWith("/") ? "" : "/"}${href}`;
 }
 
 /** Strip HTML tags + entities from a description, collapse whitespace, cap length. */
@@ -248,7 +253,11 @@ export interface BackcountryZone {
  * 14 day cells classed `status a` (available, `title` carries the permit quota) or
  * `status r` (full). Window is 14 days from `windowStart`.
  */
-export function parseBackcountryCalendar(html: string, windowStart: string): BackcountryZone[] {
+export function parseBackcountryCalendar(
+  html: string,
+  windowStart: string,
+  base: string = DEFAULT_BASE,
+): BackcountryZone[] {
   const root = parse(html);
   const zones: BackcountryZone[] = [];
   for (const row of root.querySelectorAll(".avail_row")) {
@@ -272,7 +281,7 @@ export function parseBackcountryCalendar(html: string, windowStart: string): Bac
       if (!cls.includes(" status ") || !/\bstatus\s+a\b/.test(cls)) return;
       available.push(addDaysISO(windowStart, i));
       const a = c.querySelector("a");
-      if (a && !siteUrl) siteUrl = absUrl(decode(a.getAttribute("href") || ""));
+      if (a && !siteUrl) siteUrl = absUrl(decode(a.getAttribute("href") || ""), base);
       const q = (c.getAttribute("title") || "").match(/\d+ of \d+/);
       if (q && !quota) quota = q[0];
     });

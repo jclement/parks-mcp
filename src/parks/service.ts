@@ -1,16 +1,4 @@
-import {
-  ParksClient,
-  applyPermitUrl,
-  backcountryPrimeUrl,
-  backcountryResultsUrl,
-  bookingUrl,
-  calendarUrl,
-  campingPrimeUrl,
-  campingResultsUrl,
-  facilityDetailsUrl,
-  permitBookingUrl,
-  permitCalendarUrl,
-} from "./client.ts";
+import { ALBERTA, ParksClient, SASKATCHEWAN, type AspiraConfig } from "./client.ts";
 import {
   parseAvailability,
   parseBackcountryCalendar,
@@ -28,7 +16,6 @@ import type {
   VacancyResult,
 } from "../providers/types.ts";
 
-const JURISDICTION = "Alberta Parks";
 const WINDOW_DAYS = 14;
 // Front-country calendar shows ~10 sites/page; cap paging (biggest parks ~400 sites).
 const MAX_PAGES = 60;
@@ -51,35 +38,43 @@ function shortAreaName(name: string): string {
 
 /* ----- list ----- */
 
-async function listCampgrounds(client: ParksClient): Promise<CampgroundListItem[]> {
-  await client.get(campingPrimeUrl());
-  const html = await client.get(campingResultsUrl());
-  const front: CampgroundListItem[] = parseCampgrounds(html).map((c) => ({
+async function listCampgrounds(
+  client: ParksClient,
+  jur: string,
+  withBackcountry: boolean,
+): Promise<CampgroundListItem[]> {
+  await client.get(client.campingPrimeUrl());
+  const html = await client.get(client.campingResultsUrl());
+  const front: CampgroundListItem[] = parseCampgrounds(html, client.config.base).map((c) => ({
     parkId: c.parkId,
     name: c.name,
-    jurisdiction: JURISDICTION,
+    jurisdiction: jur,
     type: "campground",
     siteTypes: c.siteTypes,
-    bookingUrl: bookingUrl(c.parkId),
+    bookingUrl: client.bookingUrl(c.parkId),
   }));
+  if (!withBackcountry) return front;
   // Backcountry is a bonus layer: never let it break the core campground list.
-  const back = await enumerateBackcountry(client).catch(() => [] as CampgroundListItem[]);
+  const back = await enumerateBackcountry(client, jur).catch(() => [] as CampgroundListItem[]);
   return [...front, ...back];
 }
 
-async function enumerateBackcountry(client: ParksClient): Promise<CampgroundListItem[]> {
-  await client.get(backcountryPrimeUrl());
-  const areasHtml = await client.get(backcountryResultsUrl());
-  const areas = parseCampgrounds(areasHtml);
+async function enumerateBackcountry(
+  client: ParksClient,
+  jur: string,
+): Promise<CampgroundListItem[]> {
+  await client.get(client.backcountryPrimeUrl());
+  const areasHtml = await client.get(client.backcountryResultsUrl());
+  const areas = parseCampgrounds(areasHtml, client.config.base);
   const start = todayISO();
 
   const items: CampgroundListItem[] = [];
   for (const area of areas) {
     let zones;
     try {
-      await client.get(applyPermitUrl(area.parkId));
-      const cal = await client.get(permitCalendarUrl(area.parkId, start));
-      zones = parseBackcountryCalendar(cal, start);
+      await client.get(client.applyPermitUrl(area.parkId));
+      const cal = await client.get(client.permitCalendarUrl(area.parkId, start));
+      zones = parseBackcountryCalendar(cal, start, client.config.base);
     } catch {
       continue; // skip an area that won't load rather than fail the whole list
     }
@@ -87,10 +82,10 @@ async function enumerateBackcountry(client: ParksClient): Promise<CampgroundList
       items.push({
         parkId: permitId(area.parkId, z.zone),
         name: `${z.zone} — ${shortAreaName(area.name)} (backcountry)`,
-        jurisdiction: JURISDICTION,
+        jurisdiction: jur,
         type: "backcountry",
         siteTypes: [],
-        bookingUrl: permitBookingUrl(area.parkId),
+        bookingUrl: client.permitBookingUrl(area.parkId),
       });
     }
   }
@@ -99,12 +94,15 @@ async function enumerateBackcountry(client: ParksClient): Promise<CampgroundList
 
 /* ----- availability ----- */
 
-function localBookingUrl(localId: string): string {
-  return isBackcountry(localId) ? permitBookingUrl(parsePermitId(localId).areaId) : bookingUrl(localId);
+function localBookingUrl(client: ParksClient, localId: string): string {
+  return isBackcountry(localId)
+    ? client.permitBookingUrl(parsePermitId(localId).areaId)
+    : client.bookingUrl(localId);
 }
 
 async function getAvailability(
   client: ParksClient,
+  jur: string,
   localId: string,
   startISO: string,
   nights: number,
@@ -116,7 +114,7 @@ async function getAvailability(
     const res = await fetchWindow(client, localId, start);
     merged = merged ? mergeAvailability(merged, res) : res;
   }
-  return { ...merged!, parkId: localId, jurisdiction: JURISDICTION, bookingUrl: localBookingUrl(localId) };
+  return { ...merged!, parkId: localId, jurisdiction: jur, bookingUrl: localBookingUrl(client, localId) };
 }
 
 async function fetchWindow(
@@ -137,8 +135,8 @@ async function fetchFrontcountryWindow(
   let merged: AvailabilityResult | null = null;
   const seen = new Set<string>();
   for (let page = 0; page < MAX_PAGES; page++) {
-    const html = await client.get(calendarUrl(parkId, startISO, page * 10));
-    const res = parseAvailability(html, startISO);
+    const html = await client.get(client.calendarUrl(parkId, startISO, page * 10));
+    const res = parseAvailability(html, startISO, client.config.base);
     const fresh = res.sites.filter((s) => !seen.has(s.siteId));
     if (fresh.length === 0) break; // wrapped / exhausted
     fresh.forEach((s) => seen.add(s.siteId));
@@ -153,10 +151,10 @@ async function fetchBackcountryWindow(
   startISO: string,
 ): Promise<AvailabilityResult> {
   const { areaId, zone } = parsePermitId(localId);
-  await client.get(backcountryPrimeUrl());
-  await client.get(applyPermitUrl(areaId)); // set current permit facility
-  const html = await client.get(permitCalendarUrl(areaId, startISO));
-  const z = parseBackcountryCalendar(html, startISO).find((x) => x.zone === zone);
+  await client.get(client.backcountryPrimeUrl());
+  await client.get(client.applyPermitUrl(areaId)); // set current permit facility
+  const html = await client.get(client.permitCalendarUrl(areaId, startISO));
+  const z = parseBackcountryCalendar(html, startISO, client.config.base).find((x) => x.zone === zone);
   const dates = Array.from({ length: WINDOW_DAYS }, (_, i) => addDaysISO(startISO, i));
   const sites: SiteAvailability[] = z
     ? [{ siteId: zone, label: zone, available: z.available, siteUrl: z.siteUrl, quota: z.quota }]
@@ -168,6 +166,7 @@ async function fetchBackcountryWindow(
 
 async function findVacancies(
   client: ParksClient,
+  jur: string,
   localId: string,
   startISO: string,
   endISO: string,
@@ -176,7 +175,7 @@ async function findVacancies(
   const lastNeeded = addDaysISO(endISO, nights);
   const avail = await getAvailabilityRange(client, localId, startISO, lastNeeded);
   const vacancies = computeVacancies(avail.sites, startISO, endISO, nights);
-  return { parkId: localId, jurisdiction: JURISDICTION, bookingUrl: localBookingUrl(localId), vacancies };
+  return { parkId: localId, jurisdiction: jur, bookingUrl: localBookingUrl(client, localId), vacancies };
 }
 
 async function getAvailabilityRange(
@@ -198,36 +197,70 @@ async function getAvailabilityRange(
 
 /* ----- info ----- */
 
-async function campgroundInfo(client: ParksClient, localId: string): Promise<CampgroundInfo> {
+async function campgroundInfo(
+  client: ParksClient,
+  jur: string,
+  localId: string,
+): Promise<CampgroundInfo> {
   if (isBackcountry(localId)) {
     const { areaId, zone } = parsePermitId(localId);
-    return { parkId: localId, name: zone, jurisdiction: JURISDICTION, bookingUrl: permitBookingUrl(areaId) };
+    return { parkId: localId, name: zone, jurisdiction: jur, bookingUrl: client.permitBookingUrl(areaId) };
   }
-  const html = await client.get(facilityDetailsUrl(localId));
+  const html = await client.get(client.facilityDetailsUrl(localId));
   const d = parseFacilityDetails(html);
   return {
     parkId: localId,
     name: d.name,
-    jurisdiction: JURISDICTION,
+    jurisdiction: jur,
     description: d.description,
     lat: d.lat,
     lng: d.lng,
-    bookingUrl: bookingUrl(localId),
+    bookingUrl: client.bookingUrl(localId),
   };
 }
 
-/* ----- provider ----- */
+/* ----- provider factory ----- */
 
-const client = new ParksClient();
+interface AspiraProviderOptions {
+  prefix: string;
+  jurisdiction: string;
+  config: AspiraConfig;
+  /** Enumerate backcountry/trip-permit facilities in list(). Default false. */
+  backcountry?: boolean;
+}
 
-export const albertaProvider: Provider = {
+/**
+ * Build a Provider for an Aspira/UNIF reservation shop. Alberta and Saskatchewan
+ * share all code, differing only by host + contract code (carried on the client)
+ * and jurisdiction label.
+ */
+function createAspiraProvider(opts: AspiraProviderOptions): Provider {
+  const client = new ParksClient(opts.config);
+  const jur = opts.jurisdiction;
+  const backcountry = opts.backcountry ?? false;
+  return {
+    prefix: opts.prefix,
+    jurisdiction: jur,
+    list: () => listCampgrounds(client, jur, backcountry),
+    availability: (id, s, n) => getAvailability(client, jur, id, s, n),
+    vacancies: (id, s, e, n) => findVacancies(client, jur, id, s, e, n),
+    info: (id) => campgroundInfo(client, jur, id),
+  };
+}
+
+export const albertaProvider: Provider = createAspiraProvider({
   prefix: "ab",
-  jurisdiction: JURISDICTION,
-  list: () => listCampgrounds(client),
-  availability: (id, s, n) => getAvailability(client, id, s, n),
-  vacancies: (id, s, e, n) => findVacancies(client, id, s, e, n),
-  info: (id) => campgroundInfo(client, id),
-};
+  jurisdiction: "Alberta Parks",
+  config: ALBERTA,
+  backcountry: true,
+});
+
+export const saskParksProvider: Provider = createAspiraProvider({
+  prefix: "sk",
+  jurisdiction: "Saskatchewan Parks",
+  config: SASKATCHEWAN,
+  backcountry: false,
+});
 
 /* ----- shared helpers (used by other providers too) ----- */
 
