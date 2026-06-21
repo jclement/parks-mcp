@@ -76,10 +76,60 @@ async function fetchBcRecSites(): Promise<PublicSite[]> {
   return out;
 }
 
-/** All free / public-land camping sites (cached). Best-effort per source. */
+const OVERPASS = "https://overpass-api.de/api/interpreter";
+
+/** OSM free/backcountry camp_sites across Canada — national fill beyond BC's gov data.
+ * Limited to fee=no or backcountry=yes so it stays "free", not commercial campgrounds. */
+async function fetchOsmCampSites(): Promise<PublicSite[]> {
+  const ql =
+    `[out:json][timeout:120];area["ISO3166-1"="CA"][admin_level=2]->.ca;` +
+    `(nwr["tourism"="camp_site"]["fee"="no"](area.ca);nwr["tourism"="camp_site"]["backcountry"="yes"](area.ca););out center tags;`;
+  const res = await fetch(OVERPASS, {
+    method: "POST",
+    headers: { "User-Agent": "camp-eh/1.0", "Content-Type": "application/x-www-form-urlencoded" },
+    body: "data=" + encodeURIComponent(ql),
+  });
+  if (!res.ok) throw new Error(`Overpass ${res.status}`);
+  const j = (await res.json()) as {
+    elements: { type: string; id: number; lat?: number; lon?: number; center?: { lat: number; lon: number }; tags?: Record<string, string> }[];
+  };
+  const out: PublicSite[] = [];
+  for (const e of j.elements ?? []) {
+    const lat = e.lat ?? e.center?.lat;
+    const lng = e.lon ?? e.center?.lon;
+    if (typeof lat !== "number" || typeof lng !== "number") continue;
+    const t = e.tags ?? {};
+    out.push({
+      id: `osm:${e.type}/${e.id}`,
+      name: t.name || "Wild / dispersed site",
+      lat,
+      lng,
+      source: "OpenStreetMap",
+    });
+  }
+  return out;
+}
+
+/** All free / public-land camping sites (cached). Best-effort per source — a failed
+ * source just drops out rather than failing the whole layer. */
 export function publicLands(): Promise<PublicSite[]> {
   return cached("publiclands:all", PUBLIC_TTL, async () => {
-    const sources = await Promise.allSettled([fetchBcRecSites()]);
+    const sources = await Promise.allSettled([fetchBcRecSites(), fetchOsmCampSites()]);
     return sources.flatMap((s) => (s.status === "fulfilled" ? s.value : []));
+  });
+}
+
+// Alberta Public Land Camping Pass area — the Eastern Slopes region where a pass is
+// required for random/dispersed Crown-land camping. A "where it's allowed" zone overlay.
+const AB_CAMPING_PASS =
+  "https://geospatial.alberta.ca/mimas/rest/services/boundaries/land_public_land_camping_pass_public/FeatureServer/0/query" +
+  "?where=1=1&outFields=Name,AREA_KM2&f=geojson";
+
+/** Public-land camping zones as GeoJSON (cached). Currently Alberta's camping-pass area. */
+export function publicZones(): Promise<unknown> {
+  return cached("publiclands:zones", PUBLIC_TTL, async () => {
+    const res = await fetch(AB_CAMPING_PASS, { headers: { "User-Agent": UA, Accept: "application/json" } });
+    if (!res.ok) throw new Error(`AB camping pass ${res.status}`);
+    return await res.json();
   });
 }

@@ -60,7 +60,7 @@ export const LANDING_HTML = `<!doctype html>
   .fpop input{width:16px;height:16px;accent-color:#22c55e}
   .fpop .hr{height:1px;background:var(--line);margin:1px 0}
   .fpop .ptag{color:#34d399;font-size:10px;font-weight:600;white-space:nowrap}
-  .tri{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:11px solid #34d399}
+  .pubdot{width:9px;height:9px;border-radius:50%;background:#34d399;box-shadow:0 0 0 1.5px #0b0f14;display:inline-block}
   .search{position:relative;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);
     border-radius:13px;padding:8px 12px;backdrop-filter:blur(6px);box-shadow:0 8px 30px #0007;flex:1 1 190px;max-width:360px}
   .search svg{flex:none;color:var(--muted)}
@@ -166,7 +166,7 @@ export const LANDING_HTML = `<!doctype html>
         <div class="hr"></div>
         <label><input type="checkbox" id="hideUnavail">Open only</label>
         <div class="hr"></div>
-        <label><input type="checkbox" id="fPublic"><span>Free / public land <span class="ptag">▲ BC</span></span></label>
+        <label><input type="checkbox" id="fPublic"><span>Free / public land <span class="ptag">● free</span></span></label>
       </div>
     </div>
     <div class="info" id="aboutBtn" title="About &amp; legend">?</div>
@@ -182,7 +182,7 @@ export const LANDING_HTML = `<!doctype html>
   <b>Type</b>
   <span><i class="dot" style="background:#cbd5e1"></i>front</span>
   <span><i class="dia" style="background:#cbd5e1"></i>back</span>
-  <span><i class="tri"></i>free</span>
+  <span><i class="pubdot"></i>free</span>
   <i class="vsep"></i>
   <b>Avail</b>
   <span><i class="ring g"></i>open</span>
@@ -217,7 +217,7 @@ export const LANDING_HTML = `<!doctype html>
     <div><b>Type</b>
       <span><i class="dot" style="background:#cbd5e1"></i>front-country</span>
       <span><i class="dia" style="background:#cbd5e1"></i>backcountry</span>
-      <span><i class="tri"></i>free / public land</span></div>
+      <span><i class="pubdot"></i>free / public land</span></div>
     <div><b>Avail</b>
       <span><i class="ring g"></i>open</span>
       <span><i class="ring r"></i>full</span>
@@ -227,8 +227,8 @@ export const LANDING_HTML = `<!doctype html>
   <div id="aboutSources"></div>
   <p class="muted" id="aboutRefresh" style="font-size:12.5px;margin-top:10px"></p>
   <p id="aboutMcp" style="font-size:12.5px;margin-top:8px"></p>
-  <p class="muted" style="font-size:12px;margin-top:8px"><b>▲ Free / public land</b> (filter funnel) shows ~1,200 free, first-come-first-served BC Recreation Sites &amp; Trails — no live availability; always check local rules &amp; fire bans.</p>
-  <p class="muted" style="font-size:11px;margin-top:6px">Map © OpenStreetMap contributors, © CARTO. Free sites contain information licensed under the Open Government Licence – British Columbia.</p>
+  <p class="muted" style="font-size:12px;margin-top:8px"><b>● Free / public land</b> (filter funnel) shows free, first-come-first-served camping: ~1,200 BC Recreation Sites &amp; Trails plus ~3,100 free/dispersed sites from OpenStreetMap nationwide, and Alberta's Crown-land Public Land Camping Pass area as a shaded zone. No live availability — always check local rules &amp; fire bans.</p>
+  <p class="muted" style="font-size:11px;margin-top:6px">Map © OpenStreetMap contributors, © CARTO. Free sites contain information licensed under the Open Government Licence – British Columbia and the Open Government Licence – Alberta, plus © OpenStreetMap contributors (ODbL).</p>
   <button id="aboutClose">Close</button>
 </div></div>
 
@@ -316,10 +316,12 @@ export const LANDING_HTML = `<!doctype html>
   elPublic.onchange=()=>{savePrefs();syncPublic();};
   $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back||prefs.pub);
 
-  // ----- free / public-land layer (BC Rec Sites & Trails — FCFS, no live availability) -----
-  const pubLayer=L.layerGroup();
-  let pubLoaded=false;
-  function triIcon(){return L.divIcon({className:"",html:'<div class="tri"></div>',iconSize:[12,11],iconAnchor:[6,9],popupAnchor:[0,-6]});}
+  // ----- free / public-land layer (BC Rec Sites + OSM points; AB Crown-land zones) -----
+  // Canvas renderer keeps thousands of free-camp points smooth.
+  const pubRenderer=L.canvas({padding:0.5});
+  const pubLayer=L.layerGroup();   // free-camp points
+  const zoneLayer=L.layerGroup();  // Crown-land "camping allowed/pass" zones
+  let pubLoaded=false,zoneLoaded=false;
   function pubPopup(s){
     const ll=s.lat.toFixed(5)+", "+s.lng.toFixed(5);
     return '<b>'+esc(s.name)+'</b><br><span class="tag">▲ '+esc(s.source)+(s.town?' · '+esc(s.town):'')+'</span>'+
@@ -328,21 +330,37 @@ export const LANDING_HTML = `<!doctype html>
       '<div class="ll"><span>'+ll+'</span><button data-ll="'+ll+'">copy</button></div>'+
       '<a class="book" href="https://www.google.com/maps/search/?api=1&query='+s.lat+','+s.lng+'" target="_blank" rel="noopener">Directions →</a>';
   }
+  function loadPubPoints(){
+    return fetch("/api/publiclands").then(r=>r.json()).then(d=>{
+      for(const s of (d.sites||[])){
+        const mk=L.circleMarker([s.lat,s.lng],{renderer:pubRenderer,radius:4,weight:1,color:"#0b0f14",fillColor:"#34d399",fillOpacity:.9}).bindPopup(pubPopup(s));
+        mk.on("popupopen",()=>{const el=mk.getPopup().getElement();const b=el&&el.querySelector(".ll button");
+          if(b&&!b._w){b._w=1;b.addEventListener("click",()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.ll).then(()=>b.textContent="copied");});}});
+        mk.addTo(pubLayer);
+      }
+      pubLoaded=true;
+    }).catch(()=>{});
+  }
+  function loadZones(){
+    return fetch("/api/publiclands/zones").then(r=>r.json()).then(gj=>{
+      L.geoJSON(gj,{style:{color:"#34d399",weight:1,fillColor:"#34d399",fillOpacity:.08},
+        onEachFeature:(f,lyr)=>{const nm=(f.properties&&f.properties.Name)||"Public-land camping area";
+          lyr.bindPopup('<b>'+esc(nm)+'</b><br><span class="tag">Alberta Crown land</span>'+
+            '<div class="muted" style="font-size:12px;margin-top:3px">Random camping in this region generally needs a <b>Public Land Camping Pass</b>. Check current rules &amp; fire bans.</div>');}
+      }).addTo(zoneLayer);
+      zoneLoaded=true;
+    }).catch(()=>{});
+  }
   async function syncPublic(){
     if(prefs.pub){
-      if(!pubLoaded){
-        try{const r=await fetch("/api/publiclands");const d=await r.json();
-          for(const s of d.sites){
-            const mk=L.marker([s.lat,s.lng],{icon:triIcon()}).bindPopup(pubPopup(s));
-            mk.on("popupopen",()=>{const el=mk.getPopup().getElement();const b=el&&el.querySelector(".ll button");
-              if(b&&!b._w){b._w=1;b.addEventListener("click",()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.ll).then(()=>b.textContent="copied");});}});
-            mk.addTo(pubLayer);
-          }
-          pubLoaded=true;
-        }catch(e){}
-      }
+      if(!zoneLoaded)await loadZones();
+      if(!pubLoaded)await loadPubPoints();
+      if(!map.hasLayer(zoneLayer))zoneLayer.addTo(map);
       if(!map.hasLayer(pubLayer))pubLayer.addTo(map);
-    } else { if(map.hasLayer(pubLayer))map.removeLayer(pubLayer); }
+    } else {
+      if(map.hasLayer(pubLayer))map.removeLayer(pubLayer);
+      if(map.hasLayer(zoneLayer))map.removeLayer(zoneLayer);
+    }
   }
   syncPublic();
   $("filterBtn").onclick=(ev)=>{ev.stopPropagation();$("fpop").classList.toggle("open");};

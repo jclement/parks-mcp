@@ -6,7 +6,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerTools } from "./mcp.ts";
 import { LANDING_HTML } from "./landing.ts";
 import { campgroundInfo, checkAvailability, geocodeSearch, listCampgrounds } from "./providers/registry.ts";
-import { publicLands } from "./providers/publiclands.ts";
+import { publicLands, publicZones } from "./providers/publiclands.ts";
 import { startHarvester } from "./harvester.ts";
 import { bulkAvailability, calendar as harvestCalendar, dbSizes, harvestStatus, parkStatuses, statusByJurisdiction, windowInfo } from "./harvest.ts";
 import { harvestEvents, mcpStats } from "./stats.ts";
@@ -166,6 +166,18 @@ const httpServer = createServer(async (req, res) => {
         );
       } catch (e) {
         res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/publiclands/zones") {
+      try {
+        const zones = await publicZones();
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=86400" }).end(
+          JSON.stringify(zones),
+        );
+      } catch (e) {
+        res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
       }
       return;
     }
@@ -338,4 +350,7 @@ const httpServer = createServer(async (req, res) => {
 httpServer.listen(PORT, () => {
   console.log(`parks-mcp listening on :${PORT}  (MCP at ${MCP_PATH})`);
   startHarvester();
+  // Warm the public-land caches (BC Rec Sites + OSM + AB zones) so the first toggle is instant.
+  publicLands().catch(() => {});
+  publicZones().catch(() => {});
 });
