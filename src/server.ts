@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerTools } from "./mcp.ts";
 import { LANDING_HTML } from "./landing.ts";
-import { campgroundInfo, checkAvailability, listCampgrounds } from "./providers/registry.ts";
+import { campgroundInfo, checkAvailability, geocodeSearch, listCampgrounds } from "./providers/registry.ts";
 import { startHarvester } from "./harvester.ts";
 import { bulkAvailability, calendar as harvestCalendar, dbSizes, harvestStatus, parkStatuses, statusByJurisdiction, windowInfo } from "./harvest.ts";
 import { harvestEvents, mcpStats } from "./stats.ts";
@@ -165,6 +165,19 @@ const httpServer = createServer(async (req, res) => {
         );
       } catch (e) {
         res.writeHead(503, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/geocode") {
+      const q = url.searchParams.get("q") || "";
+      try {
+        const hits = await geocodeSearch(q);
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=3600" }).end(
+          JSON.stringify({ hits }),
+        );
+      } catch (e) {
+        res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
       }
       return;
     }

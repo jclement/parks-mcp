@@ -160,14 +160,45 @@ export async function searchCampgrounds(p: SearchParams): Promise<SearchHit[]> {
 
 /** Geocode a place name via OpenStreetMap (cached long-term). */
 function geocode(place: string): Promise<{ lat: number; lng: number } | null> {
-  return cached(`geocode:${place.toLowerCase()}`, METADATA_TTL, async () => {
-    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=ca&q=${encodeURIComponent(place)}`;
+  return geocodeSearch(place).then((r) => (r[0] ? { lat: r[0].lat, lng: r[0].lng } : null));
+}
+
+export interface GeoHit {
+  name: string;
+  lat: number;
+  lng: number;
+  bbox?: [number, number, number, number]; // south, north, west, east
+}
+
+/** Geocode a place name to a few ranked hits (for the map search box). */
+export function geocodeSearch(place: string): Promise<GeoHit[]> {
+  const q = place.trim();
+  if (!q) return Promise.resolve([]);
+  return cached(`geosearch:${q.toLowerCase()}`, METADATA_TTL, async () => {
+    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=ca&q=${encodeURIComponent(q)}`;
     const res = await fetch(url, {
       headers: { "User-Agent": "parks-mcp/1.0 (personal)", "Accept-Language": "en" },
     });
-    if (!res.ok) return null;
-    const j = (await res.json()) as { lat: string; lon: string }[];
-    return j[0] ? { lat: Number(j[0].lat), lng: Number(j[0].lon) } : null;
+    if (!res.ok) return [];
+    const j = (await res.json()) as {
+      lat: string;
+      lon: string;
+      display_name: string;
+      boundingbox?: [string, string, string, string];
+    }[];
+    return j.map((h) => ({
+      name: h.display_name,
+      lat: Number(h.lat),
+      lng: Number(h.lon),
+      bbox: h.boundingbox
+        ? ([Number(h.boundingbox[0]), Number(h.boundingbox[1]), Number(h.boundingbox[2]), Number(h.boundingbox[3])] as [
+            number,
+            number,
+            number,
+            number,
+          ])
+        : undefined,
+    }));
   });
 }
 

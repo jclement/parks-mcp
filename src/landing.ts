@@ -59,6 +59,23 @@ export const LANDING_HTML = `<!doctype html>
   .fpop label+label{margin-top:2px}
   .fpop input{width:16px;height:16px;accent-color:#22c55e}
   .fpop .hr{height:1px;background:var(--line);margin:1px 0}
+  .search{position:relative;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);
+    border-radius:13px;padding:8px 12px;backdrop-filter:blur(6px);box-shadow:0 8px 30px #0007;flex:1 1 190px;max-width:360px}
+  .search svg{flex:none;color:var(--muted)}
+  .search input{flex:1;min-width:0;background:transparent;border:0;outline:none;color:var(--ink);font-size:14px;font-family:inherit}
+  .search input::placeholder{color:var(--muted)}
+  .search .clr{flex:none;cursor:pointer;color:var(--muted);font-size:15px;line-height:1;display:none}
+  .search.has .clr{display:block}
+  .sresults{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--panel);border:1px solid var(--line);
+    border-radius:11px;overflow:hidden auto;display:none;box-shadow:0 10px 30px #000a;z-index:1300;max-height:266px}
+  .sresults.open{display:block}
+  .sresults button{display:block;width:100%;text-align:left;background:transparent;border:0;border-top:1px solid var(--line);
+    color:var(--ink);font-size:13px;padding:8px 11px;cursor:pointer;font-family:inherit;line-height:1.25}
+  .sresults button:first-child{border-top:0}
+  .sresults button:hover,.sresults button.sel{background:#1a2433}
+  .sresults .nm{font-weight:600}
+  .sresults .rg{color:var(--muted);font-size:11px}
+  .sresults .msg{padding:9px 11px;color:var(--muted);font-size:12.5px}
   .legend{position:absolute;z-index:1000;bottom:10px;left:50%;transform:translateX(-50%);max-width:calc(100vw - 120px);
     background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 20px;backdrop-filter:blur(6px)}
   .legend .keys{display:flex;gap:7px 13px;flex-wrap:wrap;justify-content:center;align-items:center;font-size:12.5px;color:#e8eef5}
@@ -76,6 +93,7 @@ export const LANDING_HTML = `<!doctype html>
   @media (max-width:560px){
     .legend{display:none}
     .brand{display:none}
+    .search{flex-basis:100%;max-width:none;order:-1}
     .bar{top:8px;left:8px;right:8px;gap:8px;justify-content:flex-end}
     .mhint:not(:empty){display:block}
   }
@@ -124,6 +142,12 @@ export const LANDING_HTML = `<!doctype html>
   <div class="brand">
     <img src="/favicon.svg" alt="">
     <div class="meta"><b>Camp, Eh?</b> <span class="sub" id="sub">loading…</span></div>
+  </div>
+  <div class="search" id="searchWrap">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.2-4.2"/></svg>
+    <input id="searchInput" type="text" placeholder="Search a place…" autocomplete="off" enterkeyhint="search" aria-label="Search a place">
+    <span class="clr" id="searchClear" title="Clear">✕</span>
+    <div class="sresults" id="sresults"></div>
   </div>
   <div class="ctl">
     <label>Arrive<input type="date" id="start"></label>
@@ -217,17 +241,37 @@ export const LANDING_HTML = `<!doctype html>
   // ----- prefs -----
   const prefs={start:localStorage.getItem("ce_start")||"",nights:+(localStorage.getItem("ce_nights")||2),hide:localStorage.getItem("ce_hide")==="1",
     front:localStorage.getItem("ce_front")!=="0",back:localStorage.getItem("ce_back")!=="0"};
+  // URL hash overrides localStorage so a page can be bookmarked/shared (#m=lat,lng,z&d=date&n=nights&f=flags)
+  const hp=new URLSearchParams(location.hash.slice(1));
+  if(hp.has("d")&&/^\d{4}-\d{2}-\d{2}$/.test(hp.get("d")))prefs.start=hp.get("d");
+  if(hp.has("n"))prefs.nights=Math.max(1,Math.min(14,+hp.get("n")||prefs.nights));
+  if(hp.has("f")){const f=hp.get("f");prefs.front=f.includes("f");prefs.back=f.includes("b");prefs.hide=f.includes("o");}
   const elStart=$("start"),elNights=$("nights"),elHide=$("hideUnavail"),elFront=$("fFront"),elBack=$("fBack");
   elStart.min=iso(new Date()); elStart.value=prefs.start; elNights.value=prefs.nights; elHide.checked=prefs.hide; elFront.checked=prefs.front; elBack.checked=prefs.back;
   function savePrefs(){prefs.start=elStart.value;prefs.nights=Math.max(1,Math.min(14,+elNights.value||1));elNights.value=prefs.nights;
     prefs.hide=elHide.checked;prefs.front=elFront.checked;prefs.back=elBack.checked;
     localStorage.setItem("ce_start",prefs.start);localStorage.setItem("ce_nights",prefs.nights);localStorage.setItem("ce_hide",prefs.hide?"1":"0");
     localStorage.setItem("ce_front",prefs.front?"1":"0");localStorage.setItem("ce_back",prefs.back?"1":"0");
-    $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back);}
+    $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back);queueHash();}
 
   // ----- map -----
-  const map=L.map("map",{zoomControl:false,attributionControl:false}).setView([54.5,-119],5);
+  let view=[54.5,-119],zoom=5;
+  if(hp.has("m")){const a=hp.get("m").split(",").map(Number);if(a.length>=3&&a.every(x=>!isNaN(x))){view=[a[0],a[1]];zoom=Math.max(3,Math.min(18,a[2]));}}
+  const map=L.map("map",{zoomControl:false,attributionControl:false}).setView(view,zoom);
   L.control.zoom({position:"bottomright"}).addTo(map);
+  // keep the URL in sync (debounced) so the current view + filters are bookmarkable
+  let hashTimer=null;
+  function writeHash(){
+    const c=map.getCenter(),z=map.getZoom();
+    const p=new URLSearchParams();
+    p.set("m",c.lat.toFixed(4)+","+c.lng.toFixed(4)+","+z);
+    if(prefs.start)p.set("d",prefs.start);
+    p.set("n",prefs.nights);
+    p.set("f",(prefs.front?"f":"")+(prefs.back?"b":"")+(prefs.hide?"o":""));
+    history.replaceState(null,"","#"+p.toString());
+  }
+  function queueHash(){clearTimeout(hashTimer);hashTimer=setTimeout(writeHash,400);}
+  map.on("moveend",queueHash);
   L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
 
   function icon(p,status){
@@ -266,6 +310,42 @@ export const LANDING_HTML = `<!doctype html>
   $("filterBtn").onclick=(ev)=>{ev.stopPropagation();$("fpop").classList.toggle("open");};
   $("fpop").addEventListener("click",ev=>ev.stopPropagation());
   document.addEventListener("click",()=>$("fpop").classList.remove("open"));
+
+  // ----- place search (geocode → fly the map) -----
+  const sInput=$("searchInput"),sRes=$("sresults"),sWrap=$("searchWrap");
+  let sTimer=null,sHits=[],sSel=-1;
+  function flyTo(h){
+    if(h.bbox)map.fitBounds([[h.bbox[0],h.bbox[2]],[h.bbox[1],h.bbox[3]]],{maxZoom:13,padding:[40,40]});
+    else map.setView([h.lat,h.lng],11);
+  }
+  function closeRes(){sRes.classList.remove("open");sSel=-1;}
+  function renderRes(){
+    if(!sHits.length){sRes.innerHTML='<div class="msg">No matches.</div>';}
+    else sRes.innerHTML=sHits.map((h,i)=>{const parts=h.name.split(", ");const rg=parts.slice(1,3).join(", ");
+      return '<button data-i="'+i+'"><span class="nm">'+esc(parts[0])+'</span>'+(rg?' <span class="rg">'+esc(rg)+'</span>':'')+'</button>';}).join("");
+    sRes.classList.add("open");
+  }
+  async function doSearch(q){
+    try{const r=await fetch("/api/geocode?q="+encodeURIComponent(q));const d=await r.json();sHits=d.hits||[];sSel=-1;renderRes();}catch(e){sHits=[];closeRes();}
+  }
+  function pick(h){flyTo(h);sInput.value=h.name.split(", ")[0];closeRes();sInput.blur();}
+  sInput.addEventListener("input",()=>{
+    const q=sInput.value.trim();sWrap.classList.toggle("has",!!q);clearTimeout(sTimer);
+    if(q.length<2){closeRes();sHits=[];return;}
+    sTimer=setTimeout(()=>doSearch(q),320);
+  });
+  sInput.addEventListener("keydown",ev=>{
+    if((ev.key==="ArrowDown"||ev.key==="ArrowUp")&&sHits.length){ev.preventDefault();
+      sSel=(sSel+(ev.key==="ArrowDown"?1:-1)+sHits.length)%sHits.length;
+      [...sRes.querySelectorAll("button")].forEach((b,i)=>b.classList.toggle("sel",i===sSel));}
+    else if(ev.key==="Enter"){ev.preventDefault();const h=sHits[sSel>=0?sSel:0];if(h)pick(h);}
+    else if(ev.key==="Escape"){closeRes();sInput.blur();}
+  });
+  sRes.addEventListener("click",ev=>{const b=ev.target.closest("button[data-i]");if(b&&sHits[+b.dataset.i])pick(sHits[+b.dataset.i]);});
+  sInput.addEventListener("focus",()=>{if(sHits.length)sRes.classList.add("open");});
+  $("searchClear").addEventListener("click",()=>{sInput.value="";sWrap.classList.remove("has");sHits=[];closeRes();sInput.focus();});
+  document.addEventListener("click",ev=>{if(!sWrap.contains(ev.target))closeRes();});
+  queueHash();
 
   // ----- popup w/ mini-month -----
   function popupShell(p){
