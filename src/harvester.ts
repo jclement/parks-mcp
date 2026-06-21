@@ -5,7 +5,7 @@
  * Camis (BC/Parks Canada) refreshed every few hours, Alberta once a day. Also warms
  * the campground-info cache so popups load instantly.
  */
-import { campgroundInfo, listCampgrounds, rawAvailability } from "./providers/registry.ts";
+import { campgroundInfo, harvestTargets, rawAvailability } from "./providers/registry.ts";
 import { HARVEST_DAYS, harvestEnabled, lastHarvest, storeError, storeHarvest } from "./harvest.ts";
 import { harvestDone, harvestStart } from "./stats.ts";
 
@@ -91,7 +91,7 @@ async function harvestOne(parkId: string, windowStart: string, days: number): Pr
 
 async function laneTick(lane: Lane): Promise<void> {
   try {
-    if (parkIds.length === 0) parkIds = (await listCampgrounds()).map((c) => c.parkId);
+    if (parkIds.length === 0) parkIds = (await harvestTargets()).map((c) => c.parkId);
     const { prefixes } = LANES[lane];
     const windowStart = today();
     const now = Date.now();

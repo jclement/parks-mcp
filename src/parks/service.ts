@@ -20,6 +20,26 @@ const WINDOW_DAYS = 14;
 // Front-country calendar shows ~10 sites/page; cap paging (biggest parks ~400 sites).
 const MAX_PAGES = 60;
 
+/* ----- campground split -----
+ * Aspira bundles several campgrounds under one bookable "park" (e.g. Bow Valley PP
+ * holds Willow Rock, Bow River, Three Sisters…). Each site's loop carries its
+ * campground; the campground is the loop name before " - " (so "Bow Valley - Loop A"
+ * and "Willow Rock - First Come, First Served" roll up to "Bow Valley" / "Willow
+ * Rock"). A child id "<parkId>:cg:<campground>" addresses one campground. */
+const CG_SEP = ":cg:";
+export function campgroundOf(loop?: string | null): string {
+  return (loop ?? "").split(" - ")[0].trim();
+}
+export function campgroundChildId(parentId: string, cg: string): string {
+  return `${parentId}${CG_SEP}${encodeURIComponent(cg)}`;
+}
+export function splitCampgroundId(parkId: string): { parent: string; cg: string | null } {
+  const i = parkId.indexOf(CG_SEP);
+  return i < 0
+    ? { parent: parkId, cg: null }
+    : { parent: parkId.slice(0, i), cg: decodeURIComponent(parkId.slice(i + CG_SEP.length)) };
+}
+
 /* ----- Alberta backcountry local-id encoding ("permit:<areaId>:<zone>") ----- */
 
 function permitId(areaId: string, zone: string): string {
@@ -107,14 +127,16 @@ async function getAvailability(
   startISO: string,
   nights: number,
 ): Promise<AvailabilityWithMeta> {
+  const { parent, cg } = splitCampgroundId(localId);
   const windows = Math.max(1, Math.ceil(nights / WINDOW_DAYS));
   let merged: AvailabilityResult | null = null;
   for (let w = 0; w < windows; w++) {
     const start = addDaysISO(startISO, w * WINDOW_DAYS);
-    const res = await fetchWindow(client, localId, start);
+    const res = await fetchWindow(client, parent, start);
     merged = merged ? mergeAvailability(merged, res) : res;
   }
-  return { ...merged!, parkId: localId, jurisdiction: jur, bookingUrl: localBookingUrl(client, localId) };
+  const sites = cg ? merged!.sites.filter((s) => campgroundOf(s.loop) === cg) : merged!.sites;
+  return { ...merged!, sites, parkId: localId, jurisdiction: jur, bookingUrl: localBookingUrl(client, parent) };
 }
 
 async function fetchWindow(
@@ -172,10 +194,12 @@ async function findVacancies(
   endISO: string,
   nights: number,
 ): Promise<VacancyResult> {
+  const { parent, cg } = splitCampgroundId(localId);
   const lastNeeded = addDaysISO(endISO, nights);
-  const avail = await getAvailabilityRange(client, localId, startISO, lastNeeded);
-  const vacancies = computeVacancies(avail.sites, startISO, endISO, nights);
-  return { parkId: localId, jurisdiction: jur, bookingUrl: localBookingUrl(client, localId), vacancies };
+  const avail = await getAvailabilityRange(client, parent, startISO, lastNeeded);
+  const sites = cg ? avail.sites.filter((s) => campgroundOf(s.loop) === cg) : avail.sites;
+  const vacancies = computeVacancies(sites, startISO, endISO, nights);
+  return { parkId: localId, jurisdiction: jur, bookingUrl: localBookingUrl(client, parent), vacancies };
 }
 
 async function getAvailabilityRange(
@@ -206,16 +230,17 @@ async function campgroundInfo(
     const { areaId, zone } = parsePermitId(localId);
     return { parkId: localId, name: zone, jurisdiction: jur, bookingUrl: client.permitBookingUrl(areaId) };
   }
-  const html = await client.get(client.facilityDetailsUrl(localId));
+  const { parent, cg } = splitCampgroundId(localId);
+  const html = await client.get(client.facilityDetailsUrl(parent));
   const d = parseFacilityDetails(html);
   return {
     parkId: localId,
-    name: d.name,
+    name: cg ? `${cg} — ${d.name}` : d.name,
     jurisdiction: jur,
     description: d.description,
     lat: d.lat,
     lng: d.lng,
-    bookingUrl: client.bookingUrl(localId),
+    bookingUrl: client.bookingUrl(parent),
   };
 }
 

@@ -7,7 +7,7 @@
  */
 import { Database } from "bun:sqlite";
 import { mkdirSync, statSync } from "node:fs";
-import { addDaysISO } from "./parks/service.ts";
+import { addDaysISO, campgroundChildId, campgroundOf, splitCampgroundId } from "./parks/service.ts";
 import type { SiteAvailability } from "./providers/types.ts";
 
 export const HARVEST_DAYS = 90;
@@ -150,14 +150,16 @@ export function getCachedAvailability(
   startISO: string,
   span: number,
 ): CachedAvailability | null {
-  const m = okMeta(parkId);
+  const { parent, cg } = splitCampgroundId(parkId);
+  const m = okMeta(parent);
   if (!m) return null;
   const covered = m.windowDays ?? HARVEST_DAYS;
   const offset = daysBetween(m.windowStart, startISO);
   if (offset < 0 || offset + span > covered) return null; // outside the harvested window
-  const rows = db!
+  let rows = db!
     .query("SELECT siteId, label, loop, siteUrl, quota, bits FROM site_avail WHERE parkId = ?")
-    .all(parkId) as { siteId: string; label: string; loop: string | null; siteUrl: string | null; quota: string | null; bits: Uint8Array }[];
+    .all(parent) as { siteId: string; label: string; loop: string | null; siteUrl: string | null; quota: string | null; bits: Uint8Array }[];
+  if (cg) rows = rows.filter((r) => campgroundOf(r.loop) === cg);
   const dates = Array.from({ length: span }, (_, i) => addDaysISO(startISO, i));
   const sites: SiteAvailability[] = rows.map((r) => {
     const available: string[] = [];
@@ -188,23 +190,35 @@ export function bulkAvailability(
     parkId: string; windowStart: string; windowDays: number | null; updated: number;
   }[];
   const out: Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> = {};
-  const siteStmt = db.query("SELECT bits FROM site_avail WHERE parkId = ?");
+  const siteStmt = db.query("SELECT loop, bits FROM site_avail WHERE parkId = ?");
   for (const m of metas) {
     const offset = daysBetween(m.windowStart, startISO);
     if (offset < 0) continue; // date is in the past / before this harvest's window
-    if (offset + nights > (m.windowDays ?? HARVEST_DAYS)) {
-      // Harvested, but this date is deeper than the current window (still filling).
-      out[m.parkId] = { available: false, siteCount: 0, stale: false, pending: true };
-      continue;
-    }
-    const rows = siteStmt.all(m.parkId) as { bits: Uint8Array }[];
-    let count = 0;
+    const rows = siteStmt.all(m.parkId) as { loop: string | null; bits: Uint8Array }[];
+    // Group by campground so multi-campground parks (Willow Rock, Bow River…) light up
+    // as separate pins matching the catalogue.
+    const groups = new Map<string, { loop: string | null; bits: Uint8Array }[]>();
     for (const r of rows) {
-      let ok = true;
-      for (let n = 0; n < nights; n++) if (!getBit(r.bits, offset + n)) { ok = false; break; }
-      if (ok) count++;
+      const cg = campgroundOf(r.loop);
+      (groups.get(cg) ?? groups.set(cg, []).get(cg)!).push(r);
     }
-    out[m.parkId] = { available: count > 0, siteCount: count, stale: Date.now() - m.updated > staleAfter(m.parkId) };
+    const multi = groups.size > 1;
+    const pending = offset + nights > (m.windowDays ?? HARVEST_DAYS);
+    const stale = Date.now() - m.updated > staleAfter(m.parkId);
+    for (const [cg, grp] of groups) {
+      const id = multi ? campgroundChildId(m.parkId, cg) : m.parkId;
+      if (pending) {
+        out[id] = { available: false, siteCount: 0, stale: false, pending: true };
+        continue;
+      }
+      let count = 0;
+      for (const r of grp) {
+        let ok = true;
+        for (let n = 0; n < nights; n++) if (!getBit(r.bits, offset + n)) { ok = false; break; }
+        if (ok) count++;
+      }
+      out[id] = { available: count > 0, siteCount: count, stale };
+    }
   }
   return out;
 }
@@ -216,10 +230,12 @@ export function calendar(
   nights: number,
   days: number,
 ): { stale: boolean; cells: { date: string; available: boolean; siteCount: number }[] } | null {
-  const m = okMeta(parkId);
+  const { parent, cg } = splitCampgroundId(parkId);
+  const m = okMeta(parent);
   if (!m) return null;
   const covered = m.windowDays ?? HARVEST_DAYS;
-  const rows = db!.query("SELECT bits FROM site_avail WHERE parkId = ?").all(parkId) as { bits: Uint8Array }[];
+  let rows = db!.query("SELECT loop, bits FROM site_avail WHERE parkId = ?").all(parent) as { loop: string | null; bits: Uint8Array }[];
+  if (cg) rows = rows.filter((r) => campgroundOf(r.loop) === cg);
   const cells: { date: string; available: boolean; siteCount: number }[] = [];
   for (let d = 0; d < days; d++) {
     const date = addDaysISO(startISO, d);
@@ -285,6 +301,20 @@ export function dbSizes(): Record<string, number> {
 
 export function windowInfo(): { windowDays: number; today: string } {
   return { windowDays: HARVEST_DAYS, today: new Date().toISOString().slice(0, 10) };
+}
+
+/** Distinct campgrounds harvested under a parent park (Willow Rock, Bow River…),
+ * with site counts. Empty/single → the park isn't split. Drives catalogue expansion;
+ * uses the same campgroundOf() grouping as bulkAvailability so ids line up. */
+export function campgroundsOf(parentId: string): { name: string; siteCount: number }[] {
+  if (!db) return [];
+  const rows = db.query("SELECT loop FROM site_avail WHERE parkId = ?").all(parentId) as { loop: string | null }[];
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const cg = campgroundOf(r.loop);
+    counts.set(cg, (counts.get(cg) ?? 0) + 1);
+  }
+  return [...counts].map(([name, siteCount]) => ({ name, siteCount }));
 }
 
 /** When was a park last harvested (ms epoch), or 0 if never / errored. */

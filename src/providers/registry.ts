@@ -1,7 +1,7 @@
 import { cached, ttlMs } from "../parks/cache.ts";
-import { addDaysISO, albertaProvider, computeVacancies, saskParksProvider } from "../parks/service.ts";
+import { addDaysISO, albertaProvider, campgroundChildId, computeVacancies, saskParksProvider } from "../parks/service.ts";
 import { bcParksProvider, parksCanadaProvider } from "./camis.ts";
-import { getCachedAvailability } from "../harvest.ts";
+import { campgroundsOf, getCachedAvailability } from "../harvest.ts";
 import COORDS from "../data/coords.json";
 
 function daysBetween(a: string, b: string): number {
@@ -43,8 +43,9 @@ function route(parkId: string): { provider: Provider; localId: string } {
   return { provider, localId: parkId.slice(idx + 1) };
 }
 
-/** Aggregate every park system's campgrounds, ids prefixed by provider. */
-export function listCampgrounds(): Promise<CampgroundListItem[]> {
+/** The bookable facilities to harvest (provider-prefixed, un-split). The harvester
+ * fetches each of these once; multi-campground parks are split at serve time. */
+export function harvestTargets(): Promise<CampgroundListItem[]> {
   return Promise.allSettled(
     PROVIDERS.map((p) =>
       // Cache each provider's list independently so one slow/down system doesn't
@@ -53,9 +54,37 @@ export function listCampgrounds(): Promise<CampgroundListItem[]> {
         (await p.list()).map((item) => ({ ...item, parkId: `${p.prefix}:${item.parkId}` })),
       ),
     ),
-  ).then((results) => {
-    const all = results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])).map(withCoords);
-    return all.sort(
+  ).then((results) => results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])));
+}
+
+/** The display catalogue: like harvestTargets(), but parks that bundle several
+ * campgrounds (per the harvest store) are expanded into one entry per campground
+ * (e.g. Bow Valley PP → Willow Rock, Bow River, …). Children inherit the park's
+ * coords until geocoded individually. */
+export function listCampgrounds(): Promise<CampgroundListItem[]> {
+  return harvestTargets().then((parents) => {
+    const out: CampgroundListItem[] = [];
+    for (const p of parents) {
+      const withParentCoords = withCoords(p);
+      const cgs = campgroundsOf(p.parkId);
+      if (cgs.length > 1) {
+        for (const cg of cgs) {
+          const child = withCoords({
+            ...p,
+            parkId: campgroundChildId(p.parkId, cg.name),
+            name: `${cg.name} — ${p.name}`,
+          });
+          if (child.lat == null) {
+            child.lat = withParentCoords.lat;
+            child.lng = withParentCoords.lng;
+          }
+          out.push(child);
+        }
+      } else {
+        out.push(withParentCoords);
+      }
+    }
+    return out.sort(
       (a, b) => a.jurisdiction.localeCompare(b.jurisdiction) || a.name.localeCompare(b.name),
     );
   });
