@@ -59,6 +59,8 @@ export const LANDING_HTML = `<!doctype html>
   .fpop label+label{margin-top:2px}
   .fpop input{width:16px;height:16px;accent-color:#22c55e}
   .fpop .hr{height:1px;background:var(--line);margin:1px 0}
+  .fpop .ptag{color:#34d399;font-size:10px;font-weight:600;white-space:nowrap}
+  .tri{width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:11px solid #34d399}
   .search{position:relative;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);
     border-radius:13px;padding:8px 12px;backdrop-filter:blur(6px);box-shadow:0 8px 30px #0007;flex:1 1 190px;max-width:360px}
   .search svg{flex:none;color:var(--muted)}
@@ -163,6 +165,8 @@ export const LANDING_HTML = `<!doctype html>
           <label><input type="checkbox" id="fBack" checked>Backcountry</label></div>
         <div class="hr"></div>
         <label><input type="checkbox" id="hideUnavail">Open only</label>
+        <div class="hr"></div>
+        <label><input type="checkbox" id="fPublic"><span>Free / public land <span class="ptag">▲ BC</span></span></label>
       </div>
     </div>
     <div class="info" id="aboutBtn" title="About &amp; legend">?</div>
@@ -178,6 +182,7 @@ export const LANDING_HTML = `<!doctype html>
   <b>Type</b>
   <span><i class="dot" style="background:#cbd5e1"></i>front</span>
   <span><i class="dia" style="background:#cbd5e1"></i>back</span>
+  <span><i class="tri"></i>free</span>
   <i class="vsep"></i>
   <b>Avail</b>
   <span><i class="ring g"></i>open</span>
@@ -211,7 +216,8 @@ export const LANDING_HTML = `<!doctype html>
       <span><i class="dot" style="background:#ef4444"></i>Parks Canada</span></div>
     <div><b>Type</b>
       <span><i class="dot" style="background:#cbd5e1"></i>front-country</span>
-      <span><i class="dia" style="background:#cbd5e1"></i>backcountry</span></div>
+      <span><i class="dia" style="background:#cbd5e1"></i>backcountry</span>
+      <span><i class="tri"></i>free / public land</span></div>
     <div><b>Avail</b>
       <span><i class="ring g"></i>open</span>
       <span><i class="ring r"></i>full</span>
@@ -221,7 +227,8 @@ export const LANDING_HTML = `<!doctype html>
   <div id="aboutSources"></div>
   <p class="muted" id="aboutRefresh" style="font-size:12.5px;margin-top:10px"></p>
   <p id="aboutMcp" style="font-size:12.5px;margin-top:8px"></p>
-  <p class="muted" style="font-size:11px;margin-top:6px">Map © OpenStreetMap contributors, © CARTO.</p>
+  <p class="muted" style="font-size:12px;margin-top:8px"><b>▲ Free / public land</b> (filter funnel) shows ~1,200 free, first-come-first-served BC Recreation Sites &amp; Trails — no live availability; always check local rules &amp; fire bans.</p>
+  <p class="muted" style="font-size:11px;margin-top:6px">Map © OpenStreetMap contributors, © CARTO. Free sites contain information licensed under the Open Government Licence – British Columbia.</p>
   <button id="aboutClose">Close</button>
 </div></div>
 
@@ -240,19 +247,19 @@ export const LANDING_HTML = `<!doctype html>
 
   // ----- prefs -----
   const prefs={start:localStorage.getItem("ce_start")||"",nights:+(localStorage.getItem("ce_nights")||2),hide:localStorage.getItem("ce_hide")==="1",
-    front:localStorage.getItem("ce_front")!=="0",back:localStorage.getItem("ce_back")!=="0"};
+    front:localStorage.getItem("ce_front")!=="0",back:localStorage.getItem("ce_back")!=="0",pub:localStorage.getItem("ce_pub")==="1"};
   // URL hash overrides localStorage so a page can be bookmarked/shared (#m=lat,lng,z&d=date&n=nights&f=flags)
   const hp=new URLSearchParams(location.hash.slice(1));
   if(hp.has("d")&&/^\d{4}-\d{2}-\d{2}$/.test(hp.get("d")))prefs.start=hp.get("d");
   if(hp.has("n"))prefs.nights=Math.max(1,Math.min(14,+hp.get("n")||prefs.nights));
-  if(hp.has("f")){const f=hp.get("f");prefs.front=f.includes("f");prefs.back=f.includes("b");prefs.hide=f.includes("o");}
-  const elStart=$("start"),elNights=$("nights"),elHide=$("hideUnavail"),elFront=$("fFront"),elBack=$("fBack");
-  elStart.min=iso(new Date()); elStart.value=prefs.start; elNights.value=prefs.nights; elHide.checked=prefs.hide; elFront.checked=prefs.front; elBack.checked=prefs.back;
+  if(hp.has("f")){const f=hp.get("f");prefs.front=f.includes("f");prefs.back=f.includes("b");prefs.hide=f.includes("o");prefs.pub=f.includes("p");}
+  const elStart=$("start"),elNights=$("nights"),elHide=$("hideUnavail"),elFront=$("fFront"),elBack=$("fBack"),elPublic=$("fPublic");
+  elStart.min=iso(new Date()); elStart.value=prefs.start; elNights.value=prefs.nights; elHide.checked=prefs.hide; elFront.checked=prefs.front; elBack.checked=prefs.back; elPublic.checked=prefs.pub;
   function savePrefs(){prefs.start=elStart.value;prefs.nights=Math.max(1,Math.min(14,+elNights.value||1));elNights.value=prefs.nights;
-    prefs.hide=elHide.checked;prefs.front=elFront.checked;prefs.back=elBack.checked;
+    prefs.hide=elHide.checked;prefs.front=elFront.checked;prefs.back=elBack.checked;prefs.pub=elPublic.checked;
     localStorage.setItem("ce_start",prefs.start);localStorage.setItem("ce_nights",prefs.nights);localStorage.setItem("ce_hide",prefs.hide?"1":"0");
-    localStorage.setItem("ce_front",prefs.front?"1":"0");localStorage.setItem("ce_back",prefs.back?"1":"0");
-    $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back);queueHash();}
+    localStorage.setItem("ce_front",prefs.front?"1":"0");localStorage.setItem("ce_back",prefs.back?"1":"0");localStorage.setItem("ce_pub",prefs.pub?"1":"0");
+    $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back||prefs.pub);queueHash();}
 
   // ----- map -----
   let view=[54.5,-119],zoom=5;
@@ -267,7 +274,7 @@ export const LANDING_HTML = `<!doctype html>
     p.set("m",c.lat.toFixed(4)+","+c.lng.toFixed(4)+","+z);
     if(prefs.start)p.set("d",prefs.start);
     p.set("n",prefs.nights);
-    p.set("f",(prefs.front?"f":"")+(prefs.back?"b":"")+(prefs.hide?"o":""));
+    p.set("f",(prefs.front?"f":"")+(prefs.back?"b":"")+(prefs.hide?"o":"")+(prefs.pub?"p":""));
     history.replaceState(null,"","#"+p.toString());
   }
   function queueHash(){clearTimeout(hashTimer);hashTimer=setTimeout(writeHash,400);}
@@ -306,7 +313,38 @@ export const LANDING_HTML = `<!doctype html>
   function onPrefsChanged(){savePrefs();lightUp();}
   elStart.onchange=onPrefsChanged; elNights.onchange=onPrefsChanged;
   for(const el of [elHide,elFront,elBack])el.onchange=()=>{savePrefs();refreshPins();};
-  $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back);
+  elPublic.onchange=()=>{savePrefs();syncPublic();};
+  $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back||prefs.pub);
+
+  // ----- free / public-land layer (BC Rec Sites & Trails — FCFS, no live availability) -----
+  const pubLayer=L.layerGroup();
+  let pubLoaded=false;
+  function triIcon(){return L.divIcon({className:"",html:'<div class="tri"></div>',iconSize:[12,11],iconAnchor:[6,9],popupAnchor:[0,-6]});}
+  function pubPopup(s){
+    const ll=s.lat.toFixed(5)+", "+s.lng.toFixed(5);
+    return '<b>'+esc(s.name)+'</b><br><span class="tag">▲ '+esc(s.source)+(s.town?' · '+esc(s.town):'')+'</span>'+
+      (s.sites?'<div class="muted" style="font-size:12px;margin-top:3px">'+s.sites+' designated site'+(s.sites>1?'s':'')+'</div>':'')+
+      '<div class="muted" style="font-size:12px;margin-top:3px">Free · first-come, first-served. Check local rules &amp; fire bans.</div>'+
+      '<div class="ll"><span>'+ll+'</span><button data-ll="'+ll+'">copy</button></div>'+
+      '<a class="book" href="https://www.google.com/maps/search/?api=1&query='+s.lat+','+s.lng+'" target="_blank" rel="noopener">Directions →</a>';
+  }
+  async function syncPublic(){
+    if(prefs.pub){
+      if(!pubLoaded){
+        try{const r=await fetch("/api/publiclands");const d=await r.json();
+          for(const s of d.sites){
+            const mk=L.marker([s.lat,s.lng],{icon:triIcon()}).bindPopup(pubPopup(s));
+            mk.on("popupopen",()=>{const el=mk.getPopup().getElement();const b=el&&el.querySelector(".ll button");
+              if(b&&!b._w){b._w=1;b.addEventListener("click",()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.ll).then(()=>b.textContent="copied");});}});
+            mk.addTo(pubLayer);
+          }
+          pubLoaded=true;
+        }catch(e){}
+      }
+      if(!map.hasLayer(pubLayer))pubLayer.addTo(map);
+    } else { if(map.hasLayer(pubLayer))map.removeLayer(pubLayer); }
+  }
+  syncPublic();
   $("filterBtn").onclick=(ev)=>{ev.stopPropagation();$("fpop").classList.toggle("open");};
   $("fpop").addEventListener("click",ev=>ev.stopPropagation());
   document.addEventListener("click",()=>$("fpop").classList.remove("open"));
