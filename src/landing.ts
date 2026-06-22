@@ -159,6 +159,17 @@ export const LANDING_HTML = `<!doctype html>
   .detail .dbody{overflow-y:auto}
   .detail .dname{font-size:16px;font-weight:700;display:block;padding-right:30px;line-height:1.25}
   .detail .dtags{margin:5px 0 2px}
+  .detail .tag{display:inline-block;font-size:11px;color:var(--muted)}
+  .detail a.book{display:block;margin-top:11px;color:#a78bfa;font-weight:600;text-decoration:none;font-size:13px}
+  .detail a.book:hover{text-decoration:underline}
+  .detail .desc{color:#cbd5e1;margin-top:10px;font-size:12.5px;line-height:1.45;max-height:160px;overflow:auto}
+  .detail .muted{color:var(--muted)}
+  .detail .ll{display:inline-flex;align-items:stretch;gap:0;margin:10px 0 0;max-width:100%;
+    font-family:ui-monospace,monospace;font-size:12px;color:#cbd5e1;background:var(--bg);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .detail .ll span{padding:5px 4px 5px 10px;align-self:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .detail .ll button{flex:none;cursor:pointer;background:#1a2433;color:#cbd5e1;border:0;border-left:1px solid var(--line);
+    font-family:inherit;font-size:11px;font-weight:600;padding:0 11px}
+  .detail .ll button:hover{background:#22304a;color:#fff}
   @media(min-width:561px){ .detail{left:12px;bottom:12px;width:344px;max-width:calc(100vw - 24px)} .detail .dbody{max-height:min(72vh,560px)} }
   @media(max-width:560px){ .detail{inset:0} .detail .dcard{height:100%;border:0;border-radius:0;padding:48px 16px 18px;display:flex;flex-direction:column} .detail .dbody{flex:1;max-height:none} .detail .dclose{top:11px;right:13px;width:36px;height:36px;font-size:16px} }
   .leaflet-container{background:#0b0f14}

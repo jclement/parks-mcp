@@ -57,8 +57,32 @@ function openDb(): Database | null {
     }
     return d;
   } catch (e) {
-    console.warn(`harvest: disabled (cannot open SQLite): ${(e as Error).message}`);
-    return null;
+    // Read-write open failed (e.g. a read-only cache mount). Fall back to read-only so we
+    // can still SERVE previously-harvested data; all writes below no-op (best-effort).
+    try {
+      const ro = new Database(`${dir}/harvest.db`, { readonly: true });
+      console.warn(`harvest: opened READ-ONLY — cache dir not writable, data won't refresh: ${(e as Error).message}`);
+      return ro;
+    } catch {
+      console.warn(`harvest: disabled (cannot open SQLite): ${(e as Error).message}`);
+      return null;
+    }
+  }
+}
+
+// Disk writes are best-effort: a read-only cache DB must never crash a read or a booking
+// query — it just means the harvest can't be persisted/refreshed.
+let writeWarned = false;
+function safeWrite(fn: () => void): boolean {
+  try {
+    fn();
+    return true;
+  } catch (e) {
+    if (!writeWarned) {
+      writeWarned = true;
+      console.warn(`harvest: write failed, serving read-only cache: ${(e as Error).message}`);
+    }
+    return false;
   }
 }
 
@@ -128,8 +152,7 @@ export function storeHarvest(
       [parkId, windowStart, windowDays, occupancy, jurisdiction, bookingUrl, sites.length, Date.now()],
     );
   });
-  tx();
-  emitHarvest(parkId);
+  if (safeWrite(tx)) emitHarvest(parkId);
 }
 
 /** Merge a live re-check of [rangeStart, rangeStart+rangeDays) into an existing harvest,
@@ -171,16 +194,17 @@ export function refreshHarvestRange(
     }
     db!.run("UPDATE park_meta SET updated = ? WHERE parkId = ?", [Date.now(), parentId]);
   });
-  tx();
-  emitHarvest(parentId);
+  if (safeWrite(tx)) emitHarvest(parentId);
 }
 
 export function storeError(parkId: string, message: string): void {
   if (!db) return;
-  db.run(
-    "INSERT INTO park_meta (parkId, updated, ok, error) VALUES (?, ?, 0, ?) " +
-      "ON CONFLICT(parkId) DO UPDATE SET updated=excluded.updated, ok=0, error=excluded.error",
-    [parkId, Date.now(), message.slice(0, 200)],
+  safeWrite(() =>
+    db!.run(
+      "INSERT INTO park_meta (parkId, updated, ok, error) VALUES (?, ?, 0, ?) " +
+        "ON CONFLICT(parkId) DO UPDATE SET updated=excluded.updated, ok=0, error=excluded.error",
+      [parkId, Date.now(), message.slice(0, 200)],
+    ),
   );
 }
 
