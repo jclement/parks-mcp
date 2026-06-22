@@ -21,16 +21,16 @@ docker compose logs -f gatecrash   # watch the tunnel connect
 ```
 
 `parks-mcp` becomes healthy first (compose waits on its healthcheck), then
-gatecrash connects to `aardvark.onewheelgeek.net:55808` with the `parks:` token.
+gatecrash connects to your relay server (`GATECRASH_SERVER`) with your tunnel token.
 
 ## Reaching the MCP endpoint
 
 The public URL is whatever your gatecrash server maps the `parks` tunnel to (its
-hostname/scheme is configured server-side on `aardvark.onewheelgeek.net`), with the
+hostname/scheme is configured server-side on your relay host), with the
 MCP path appended:
 
 ```
-https://<parks-tunnel-host>/burrow/9f3a7c2e1d/mcp
+https://<parks-tunnel-host>/mcp
 ```
 
 Point a Streamable-HTTP MCP client at that URL. The root `/` of the tunnel serves
