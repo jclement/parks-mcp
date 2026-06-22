@@ -13,14 +13,23 @@ import type { SiteAvailability } from "./providers/types.ts";
 export const HARVEST_DAYS = 90;
 const BYTES = Math.ceil(HARVEST_DAYS / 8);
 
-// Past this age a park's harvest is considered stale (shown as an orange warning).
-const STALE_MS: Record<string, number> = {
-  ab: 28 * 60 * 60 * 1000, // Alberta refreshes daily
-  bc: 6 * 60 * 60 * 1000,
-  pc: 6 * 60 * 60 * 1000,
-};
-function staleAfter(parkId: string): number {
-  return STALE_MS[parkId.slice(0, 2)] ?? 28 * 60 * 60 * 1000;
+/** How often we aim to refresh a park, by how full it is: near-capacity parks change
+ * fast (cancellations matter) so refresh often; wide-open ones barely change. Aspira
+ * (AB/SK) gets a gentler floor since each harvest is expensive. Shared with the
+ * harvester so the schedule and the staleness label agree. */
+export function refreshIntervalMs(parkId: string, occupancy: number): number {
+  let hours: number;
+  if (occupancy >= 0.85) hours = 4;
+  else if (occupancy >= 0.6) hours = 8;
+  else if (occupancy >= 0.3) hours = 16;
+  else hours = 24; // wide open — barely changes
+  if (parkId.startsWith("ab") || parkId.startsWith("sk")) hours = Math.max(hours, 8);
+  return hours * 60 * 60 * 1000;
+}
+// "Stale" means a refresh is overdue (harvester falling behind / genuinely old), not
+// merely "older than a fixed cutoff" — so it scales with the park's own cadence.
+function staleAfter(parkId: string, occupancy: number): number {
+  return Math.max(12 * 60 * 60 * 1000, refreshIntervalMs(parkId, occupancy) * 1.5);
 }
 
 const db = openDb();
@@ -121,11 +130,12 @@ interface MetaRow {
   jurisdiction: string;
   bookingUrl: string;
   updated: number;
+  occupancy: number | null;
 }
 function okMeta(parkId: string): MetaRow | null {
   if (!db) return null;
   return (db
-    .query("SELECT parkId, windowStart, windowDays, jurisdiction, bookingUrl, updated FROM park_meta WHERE parkId = ? AND ok = 1")
+    .query("SELECT parkId, windowStart, windowDays, jurisdiction, bookingUrl, updated, occupancy FROM park_meta WHERE parkId = ? AND ok = 1")
     .get(parkId) as MetaRow) || null;
 }
 
@@ -175,7 +185,7 @@ export function getCachedAvailability(
     dates,
     sites,
     harvestedAt: m.updated,
-    stale: Date.now() - m.updated > staleAfter(parkId),
+    stale: Date.now() - m.updated > staleAfter(parent, m.occupancy ?? 0),
   };
 }
 
@@ -186,8 +196,8 @@ export function bulkAvailability(
   nights: number,
 ): Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> {
   if (!db) return {};
-  const metas = db.query("SELECT parkId, windowStart, windowDays, updated FROM park_meta WHERE ok = 1").all() as {
-    parkId: string; windowStart: string; windowDays: number | null; updated: number;
+  const metas = db.query("SELECT parkId, windowStart, windowDays, updated, occupancy FROM park_meta WHERE ok = 1").all() as {
+    parkId: string; windowStart: string; windowDays: number | null; updated: number; occupancy: number | null;
   }[];
   const out: Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> = {};
   const siteStmt = db.query("SELECT loop, bits FROM site_avail WHERE parkId = ?");
@@ -204,7 +214,7 @@ export function bulkAvailability(
     }
     const multi = groups.size > 1;
     const pending = offset + nights > (m.windowDays ?? HARVEST_DAYS);
-    const stale = Date.now() - m.updated > staleAfter(m.parkId);
+    const stale = Date.now() - m.updated > staleAfter(m.parkId, m.occupancy ?? 0);
     for (const [cg, grp] of groups) {
       const id = multi ? campgroundChildId(m.parkId, cg) : m.parkId;
       if (pending) {
@@ -249,7 +259,7 @@ export function calendar(
     }
     cells.push({ date, available: count > 0, siteCount: count });
   }
-  return { stale: Date.now() - m.updated > staleAfter(parkId), cells };
+  return { stale: Date.now() - m.updated > staleAfter(parent, m.occupancy ?? 0), cells };
 }
 
 export function statusByJurisdiction(): Record<string, { harvested: number; newest: number | null; oldest: number | null; sites: number }> {

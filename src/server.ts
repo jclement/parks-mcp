@@ -265,7 +265,7 @@ const httpServer = createServer(async (req, res) => {
           harvest: harvestEvents,
           mcp: mcpStats,
           refresh: {
-            adaptive: "4–36h by occupancy",
+            adaptive: "4–24h by occupancy",
             windowDays: 90,
             phase1Days: Number(process.env.HARVEST_ASPIRA_PHASE1_DAYS) || 30,
             camisLaneSeconds: Number(process.env.HARVEST_CAMIS_SPACING_SECONDS) || 6,

@@ -6,7 +6,7 @@
  * the campground-info cache so popups load instantly.
  */
 import { campgroundInfo, harvestTargets, rawAvailability } from "./providers/registry.ts";
-import { HARVEST_DAYS, harvestEnabled, lastHarvest, storeError, storeHarvest } from "./harvest.ts";
+import { HARVEST_DAYS, harvestEnabled, lastHarvest, refreshIntervalMs, storeError, storeHarvest } from "./harvest.ts";
 import { harvestDone, harvestStart } from "./stats.ts";
 
 // Two independent lanes so a slow Aspira park can't starve the cheap Camis ones.
@@ -19,18 +19,8 @@ type Lane = keyof typeof LANES;
 
 const isAspira = (id: string) => id.startsWith("ab") || id.startsWith("sk");
 
-// Adaptive refresh: parks near capacity change fast (cancellations matter) → refresh
-// often; wide-open parks barely change → refresh rarely. Aspira gets a gentler floor
-// since each harvest is expensive.
-function intervalMs(parkId: string, occupancy: number): number {
-  let hours: number;
-  if (occupancy >= 0.85) hours = 4; // near full → ~6×/day
-  else if (occupancy >= 0.6) hours = 8; // ~3×/day
-  else if (occupancy >= 0.3) hours = 16;
-  else hours = 36; // wide open
-  if (isAspira(parkId)) hours = Math.max(hours, 8);
-  return hours * 3600 * 1000;
-}
+// Adaptive refresh cadence lives in harvest.ts (refreshIntervalMs) so the schedule and
+// the "stale" label stay in sync.
 
 // Aspira (AB/SK) is slow, so harvest a short window first — real data for every park
 // fast — then expand to the full window once that quick pass is done.
@@ -47,7 +37,7 @@ const rr: Record<Lane, number> = { camis: 0, aspira: 0 };
 function dueAt(parkId: string, windowStart: string): number {
   const m = lastHarvest(parkId);
   if (!m.updated || m.windowStart !== windowStart || m.windowDays < targetDays(parkId)) return 0;
-  return m.updated + intervalMs(parkId, m.occupancy);
+  return m.updated + refreshIntervalMs(parkId, m.occupancy);
 }
 
 /** Once every Aspira park has the phase-1 window for today, expand to the full window. */
@@ -136,7 +126,7 @@ export function startHarvester(): void {
   }
   console.log(
     `harvester: 2 lanes — camis(BC/PC) ~${LANES.camis.spacing / 1000}s, aspira(AB/SK) ~${LANES.aspira.spacing / 1000}s; ` +
-      `adaptive refresh 4–36h by occupancy; Aspira phase-1 ${ASPIRA_PHASE1_DAYS}d`,
+      `adaptive refresh 4–24h by occupancy; Aspira phase-1 ${ASPIRA_PHASE1_DAYS}d`,
   );
   setTimeout(() => laneTick("camis"), 1500);
   setTimeout(() => laneTick("aspira"), 3000);
