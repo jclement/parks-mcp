@@ -136,7 +136,8 @@ export function registerTools(server: McpServer) {
     async ({ parkId, startDate, nights }) => {
       recordMcp("get_availability");
       try {
-        return okCompact(await getAvailability(parkId, startDate, nights ?? 14));
+        // Live so booking decisions reflect real-time reservations, not an hours-old snapshot.
+        return okCompact(await getAvailability(parkId, startDate, nights ?? 14, { live: true }));
       } catch (e) {
         return fail(e);
       }
@@ -158,7 +159,8 @@ export function registerTools(server: McpServer) {
     async ({ parkId, startDate, endDate, nights }) => {
       recordMcp("find_vacancies");
       try {
-        const r = await findVacancies(parkId, startDate, endDate, nights);
+        // Live so we never recommend a site that was booked since the last harvest.
+        const r = await findVacancies(parkId, startDate, endDate, nights, { live: true });
         return ok({
           parkId,
           jurisdiction: r.jurisdiction,
@@ -166,6 +168,7 @@ export function registerTools(server: McpServer) {
           endDate,
           nights,
           bookingUrl: r.bookingUrl,
+          source: r.source,
           count: r.vacancies.length,
           vacancies: r.vacancies,
         });

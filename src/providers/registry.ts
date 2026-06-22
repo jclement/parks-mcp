@@ -100,14 +100,20 @@ export async function rawAvailability(
   return { ...(await provider.availability(localId, startISO, nights)), parkId };
 }
 
+/** opts.live skips the (possibly hours-old) harvest snapshot and goes to the provider —
+ * still wrapped in a 5-minute cache. Booking tools (MCP) want this; the map uses the
+ * harvest snapshot for instant browsing. */
 export function getAvailability(
   parkId: string,
   startISO: string,
   nights: number,
+  opts?: { live?: boolean },
 ): Promise<AvailabilityWithMeta> {
   const span = Math.max(nights, 14);
-  const hit = getCachedAvailability(parkId, startISO, span);
-  if (hit) return Promise.resolve({ ...hit, source: "harvest" } as AvailabilityWithMeta);
+  if (!opts?.live) {
+    const hit = getCachedAvailability(parkId, startISO, span);
+    if (hit) return Promise.resolve({ ...hit, source: "harvest" } as AvailabilityWithMeta);
+  }
   return cached(`avail:${parkId}:${startISO}:${nights}`, AVAILABILITY_TTL, async () => {
     const r = await rawAvailability(parkId, startISO, nights);
     return { ...r, source: "live" } as AvailabilityWithMeta;
@@ -119,9 +125,10 @@ export function findVacancies(
   startISO: string,
   endISO: string,
   nights: number,
+  opts?: { live?: boolean },
 ): Promise<VacancyResult> {
   const span = daysBetween(startISO, endISO) + nights + 1;
-  const hit = getCachedAvailability(parkId, startISO, span);
+  const hit = opts?.live ? null : getCachedAvailability(parkId, startISO, span);
   if (hit) {
     const vacancies = computeVacancies(hit.sites, startISO, endISO, nights);
     return Promise.resolve({
