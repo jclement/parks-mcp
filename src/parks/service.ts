@@ -28,16 +28,21 @@ const MAX_PAGES = 60;
  * Rock"). A child id "<parkId>:cg:<campground>" addresses one campground. */
 const CG_SEP = ":cg:";
 export function campgroundOf(loop?: string | null): string {
-  return (loop ?? "").split(" - ")[0].trim();
+  // First meaningful segment before " - " ("Bow Valley - Loop A" → "Bow Valley").
+  // Skip empty segments (a leading " - ", or a null/blank loop) and fall back to "Main"
+  // so a sub-loop never yields a blank "<park>:cg:" child id or a " — <Park>" name.
+  const parts = (loop ?? "").split(" - ").map((s) => s.trim()).filter(Boolean);
+  return parts[0] || "Main";
 }
 export function campgroundChildId(parentId: string, cg: string): string {
   return `${parentId}${CG_SEP}${encodeURIComponent(cg)}`;
 }
 export function splitCampgroundId(parkId: string): { parent: string; cg: string | null } {
   const i = parkId.indexOf(CG_SEP);
-  return i < 0
-    ? { parent: parkId, cg: null }
-    : { parent: parkId.slice(0, i), cg: decodeURIComponent(parkId.slice(i + CG_SEP.length)) };
+  if (i < 0) return { parent: parkId, cg: null };
+  const cg = decodeURIComponent(parkId.slice(i + CG_SEP.length)).trim();
+  // A malformed/empty segment (e.g. an old "<park>:cg:" link) round-trips to the parent.
+  return cg ? { parent: parkId.slice(0, i), cg } : { parent: parkId.slice(0, i), cg: null };
 }
 
 /* ----- Alberta backcountry local-id encoding ("permit:<areaId>:<zone>") ----- */
