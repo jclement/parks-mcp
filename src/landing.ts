@@ -148,6 +148,8 @@ export const LANDING_HTML = `<!doctype html>
   .cal .mnav{background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:7px;width:26px;height:22px;cursor:pointer;font-size:14px;line-height:1;padding:0}
   .cal .mnav:disabled{opacity:.3;cursor:default}
   .cal .calnote{grid-column:1/-1;font-size:11px;color:#64748b;padding:6px 2px}
+  .cspin{display:inline-block;width:11px;height:11px;margin-left:6px;border:2px solid #ffffff33;border-top-color:#cbd5e1;border-radius:50%;animation:cspin .7s linear infinite;vertical-align:-1px}
+  @keyframes cspin{to{transform:rotate(360deg)}}
   /* detail panel — replaces Leaflet popups (mobile = full-screen, desktop = floating card) */
   .detail{position:fixed;z-index:1600;display:none}
   .detail.on{display:block}
@@ -339,23 +341,37 @@ export const LANDING_HTML = `<!doctype html>
   function refreshPins(){
     for(const e of entries){
       const st=statusOf(e.p);
-      e.status=st;
       const back=e.p.t==="backcountry";
       const typeHidden=(back&&!prefs.back)||(!back&&!prefs.front);
       const hideIt=typeHidden||(prefs.hide&&prefs.start&&bulk[e.p.id]&&!bulk[e.p.id].available);
-      if(hideIt){ if(map.hasLayer(e.m))e.m.remove(); }
-      else { if(!map.hasLayer(e.m))e.m.addTo(map); e.m.setIcon(icon(e.p,st)); }
+      const onMap=map.hasLayer(e.m);
+      if(hideIt){ if(onMap)e.m.remove(); e.status=st; continue; }
+      if(!onMap)e.m.addTo(map);
+      if(!onMap||st!==e.status)e.m.setIcon(icon(e.p,st)); // only redraw new/changed dots
+      e.status=st;
     }
     const lit=Object.keys(bulk).filter(k=>!bulk[k].pending).length;
     const msg = prefs.start ? (lit < entries.length ? "filling availability… "+lit+"/"+entries.length+" ready" : "") : "set arrive date ↑ to light up";
     $("sub").textContent = msg || (parkCount + " parks");
     $("mhint").textContent = msg;
   }
+  let bulkServerTime=0;
   async function lightUp(){
-    if(!prefs.start){bulk={};refreshPins();return;}
-    try{const r=await fetch("/api/availability-bulk?start="+prefs.start+"&nights="+prefs.nights);const d=await r.json();bulk=d.parks||{};}catch(e){bulk={};}
+    if(!prefs.start){bulk={};bulkServerTime=0;refreshPins();return;}
+    try{const r=await fetch("/api/availability-bulk?start="+prefs.start+"&nights="+prefs.nights);const d=await r.json();bulk=d.parks||{};bulkServerTime=d.serverTime||0;}catch(e){bulk={};}
     refreshPins();
   }
+  // Live dot refresh: every few minutes pull ONLY parks re-harvested since our last
+  // fetch (server delta) and redraw just those dots — no full-map flicker.
+  async function pollBulk(){
+    if(!prefs.start||!bulkServerTime)return;
+    try{
+      const r=await fetch("/api/availability-bulk?start="+prefs.start+"&nights="+prefs.nights+"&since="+bulkServerTime);
+      const d=await r.json(); if(d.serverTime)bulkServerTime=d.serverTime;
+      const delta=d.parks||{}; if(Object.keys(delta).length){Object.assign(bulk,delta);refreshPins();}
+    }catch(e){}
+  }
+  setInterval(pollBulk, 5*60*1000);
   function onPrefsChanged(){savePrefs();lightUp();}
   elStart.onchange=onPrefsChanged; elNights.onchange=onPrefsChanged;
   for(const el of [elHide,elFront,elBack])el.onchange=()=>{savePrefs();refreshPins();};
@@ -476,7 +492,7 @@ export const LANDING_HTML = `<!doctype html>
     const t=new Date(),ty=t.getUTCFullYear(),tm=t.getUTCMonth();
     const lastD=new Date(Date.now()+(WINDOW_DAYS-1)*864e5);
     const maxOff=(lastD.getUTCFullYear()-ty)*12+(lastD.getUTCMonth()-tm);
-    offset=Math.max(0,Math.min(maxOff,offset));
+    offset=Math.max(0,Math.min(maxOff,offset)); host._offset=offset;
     const first=new Date(Date.UTC(ty,tm+offset,1)),y=first.getUTCFullYear(),mo=first.getUTCMonth();
     const fw=first.getUTCDay(),dim=new Date(Date.UTC(y,mo+1,0)).getUTCDate();
     const days=Math.ceil((fw+dim)/7)*7,gridStart=iso(new Date(Date.UTC(y,mo,1-fw)));
@@ -500,7 +516,22 @@ export const LANDING_HTML = `<!doctype html>
         return '<div class="d '+cls+sel+'" title="'+tip+'">'+day+'</div>';
       }).join("");
       grid.innerHTML=wd+cells;
+      // If this park's cache is >30 min old, live-refresh it (spinner) so the booking
+      // dates you're looking at are current.
+      if(c.harvestedAt&&Date.now()-c.harvestedAt>30*60000&&!p._confirming)maybeConfirm(p,host);
     }).catch(()=>{grid.innerHTML='<div class="calnote">Availability unavailable.</div>';});
+  }
+  // Live-verify one park, update its dot, and re-render the calendar from the now-fresh cache.
+  async function maybeConfirm(p,host){
+    if(p._confirming)return; p._confirming=true;
+    const lbl=host.querySelector(".mlabel span"); if(lbl&&!lbl.querySelector(".cspin"))lbl.insertAdjacentHTML("beforeend",' <span class="cspin"></span>');
+    try{
+      const r=await fetch("/api/confirm?id="+encodeURIComponent(p.id)+"&start="+prefs.start+"&nights="+prefs.nights);
+      const d=await r.json();
+      if(d&&typeof d.siteCount==="number"){bulk[p.id]={available:d.available,siteCount:d.siteCount,stale:false};refreshPins();}
+      p._confirming=false;
+      renderCal(host,p,host._offset||0); // re-render from refreshed cache
+    }catch(e){p._confirming=false;const sp=host.querySelector(".cspin");if(sp)sp.remove();}
   }
 
   function openParkDetail(p){

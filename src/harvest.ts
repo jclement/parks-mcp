@@ -114,6 +114,48 @@ export function storeHarvest(
   tx();
 }
 
+/** Merge a live re-check of [rangeStart, rangeStart+rangeDays) into an existing harvest,
+ * updating only those days' bits per site and bumping `updated` — so a "confirm" refreshes
+ * the queried dates without shrinking the park's 90-day window. Falls back to a full store
+ * if the park has no harvest yet. */
+export function refreshHarvestRange(
+  parentId: string,
+  jurisdiction: string,
+  bookingUrl: string,
+  rangeStartISO: string,
+  rangeDays: number,
+  sites: SiteAvailability[],
+): void {
+  if (!db) return;
+  const m = okMeta(parentId);
+  if (!m) {
+    storeHarvest(parentId, rangeStartISO, rangeDays, jurisdiction, bookingUrl, sites);
+    return;
+  }
+  const windowDays = m.windowDays ?? HARVEST_DAYS;
+  const base = daysBetween(m.windowStart, rangeStartISO);
+  const get = db.query("SELECT bits FROM site_avail WHERE parkId = ? AND siteId = ?");
+  const put = db.prepare(
+    "INSERT OR REPLACE INTO site_avail (parkId, siteId, label, loop, siteUrl, quota, bits) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  );
+  const tx = db.transaction(() => {
+    for (const s of sites) {
+      const row = get.get(parentId, s.siteId) as { bits: Uint8Array } | null;
+      const bits = row ? new Uint8Array(row.bits) : new Uint8Array(BYTES);
+      const avail = new Set(s.available);
+      for (let i = 0; i < rangeDays; i++) {
+        const day = base + i;
+        if (day < 0 || day >= windowDays) continue;
+        if (avail.has(addDaysISO(rangeStartISO, i))) bits[day >> 3] |= 1 << (day & 7);
+        else bits[day >> 3] &= ~(1 << (day & 7));
+      }
+      put.run(parentId, s.siteId, s.label, s.loop ?? null, s.siteUrl ?? null, s.quota ?? null, Buffer.from(bits));
+    }
+    db!.run("UPDATE park_meta SET updated = ? WHERE parkId = ?", [Date.now(), parentId]);
+  });
+  tx();
+}
+
 export function storeError(parkId: string, message: string): void {
   if (!db) return;
   db.run(
@@ -194,9 +236,14 @@ export function getCachedAvailability(
 export function bulkAvailability(
   startISO: string,
   nights: number,
+  since = 0,
 ): Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> {
   if (!db) return {};
-  const metas = db.query("SELECT parkId, windowStart, windowDays, updated, occupancy FROM park_meta WHERE ok = 1").all() as {
+  // `since` (ms) returns only parks re-harvested after that time — a cheap delta for the
+  // map's live poll, so unchanged dots aren't re-sent.
+  const metas = db
+    .query("SELECT parkId, windowStart, windowDays, updated, occupancy FROM park_meta WHERE ok = 1 AND updated > ?")
+    .all(since) as {
     parkId: string; windowStart: string; windowDays: number | null; updated: number; occupancy: number | null;
   }[];
   const out: Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> = {};
@@ -239,7 +286,7 @@ export function calendar(
   startISO: string,
   nights: number,
   days: number,
-): { stale: boolean; cells: { date: string; available: boolean; siteCount: number }[] } | null {
+): { stale: boolean; harvestedAt: number; cells: { date: string; available: boolean; siteCount: number }[] } | null {
   const { parent, cg } = splitCampgroundId(parkId);
   const m = okMeta(parent);
   if (!m) return null;
@@ -259,7 +306,7 @@ export function calendar(
     }
     cells.push({ date, available: count > 0, siteCount: count });
   }
-  return { stale: Date.now() - m.updated > staleAfter(parent, m.occupancy ?? 0), cells };
+  return { stale: Date.now() - m.updated > staleAfter(parent, m.occupancy ?? 0), harvestedAt: m.updated, cells };
 }
 
 export function statusByJurisdiction(): Record<string, { harvested: number; newest: number | null; oldest: number | null; sites: number }> {

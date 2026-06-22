@@ -4,6 +4,7 @@ import { QueueBlockedError, QueueBusyError } from "./parks/client.ts";
 import { recordMcp } from "./stats.ts";
 import {
   campgroundInfo,
+  confirmAvailability,
   findVacancies,
   getAvailability,
   listCampgrounds,
@@ -136,8 +137,8 @@ export function registerTools(server: McpServer) {
     async ({ parkId, startDate, nights }) => {
       recordMcp("get_availability");
       try {
-        // Live so booking decisions reflect real-time reservations, not an hours-old snapshot.
-        return okCompact(await getAvailability(parkId, startDate, nights ?? 14, { live: true }));
+        // Fast (cache-backed). Call confirm_availability to live-verify before booking.
+        return okCompact(await getAvailability(parkId, startDate, nights ?? 14));
       } catch (e) {
         return fail(e);
       }
@@ -149,7 +150,9 @@ export function registerTools(server: McpServer) {
     "Find sites/zones at a campground open for a run of consecutive nights with a " +
       "check-in date in the given range. Use this to answer 'is anything free at " +
       "park X between A and B for N nights'. Returns matching sites with " +
-      "checkIn/checkOut dates and booking URLs.",
+      "checkIn/checkOut dates and booking URLs. Results come from a periodically-" +
+      "refreshed cache and can be slightly stale — before recommending or booking a " +
+      "specific site, call confirm_availability to verify it live.",
     {
       parkId: PARK_ID,
       startDate: ISO.describe("Earliest acceptable check-in date (YYYY-MM-DD)"),
@@ -159,8 +162,8 @@ export function registerTools(server: McpServer) {
     async ({ parkId, startDate, endDate, nights }) => {
       recordMcp("find_vacancies");
       try {
-        // Live so we never recommend a site that was booked since the last harvest.
-        const r = await findVacancies(parkId, startDate, endDate, nights, { live: true });
+        // Fast (cache-backed) discovery. Live-verify a candidate with confirm_availability.
+        const r = await findVacancies(parkId, startDate, endDate, nights);
         return ok({
           parkId,
           jurisdiction: r.jurisdiction,
@@ -172,6 +175,28 @@ export function registerTools(server: McpServer) {
           count: r.vacancies.length,
           vacancies: r.vacancies,
         });
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  server.tool(
+    "confirm_availability",
+    "Live-verify one campground's availability right now, bypassing the cache, and " +
+      "refresh the cache with the result. Use this before recommending or booking a " +
+      "specific site — list_campgrounds / get_availability / find_vacancies serve a " +
+      "periodically-refreshed cache that can be slightly stale, so a site they show as " +
+      "open may already be booked. Slower than the cached tools (a live upstream fetch).",
+    {
+      parkId: PARK_ID,
+      startDate: ISO.describe("First date of the window to verify (YYYY-MM-DD)"),
+      nights: z.number().int().min(1).max(60).optional().describe("Span to cover (default 14)"),
+    },
+    async ({ parkId, startDate, nights }) => {
+      recordMcp("confirm_availability");
+      try {
+        return okCompact(await confirmAvailability(parkId, startDate, nights ?? 14));
       } catch (e) {
         return fail(e);
       }

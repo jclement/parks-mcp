@@ -5,7 +5,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { registerTools } from "./mcp.ts";
 import { LANDING_HTML } from "./landing.ts";
-import { campgroundInfo, checkAvailability, geocodeSearch, listCampgrounds } from "./providers/registry.ts";
+import { campgroundInfo, checkAvailability, confirmAvailability, geocodeSearch, listCampgrounds } from "./providers/registry.ts";
 import { publicLands, publicZones } from "./providers/publiclands.ts";
 import { startHarvester } from "./harvester.ts";
 import { bulkAvailability, calendar as harvestCalendar, dbSizes, harvestStatus, parkStatuses, statusByJurisdiction, windowInfo } from "./harvest.ts";
@@ -56,6 +56,11 @@ Typical flow:
 2. Pass that parkId to get_availability (per-site open dates) or find_vacancies
    (sites open for N consecutive nights in a date range), or campground_info
    (description + coordinates).
+3. Before you recommend or hand off a booking link for a SPECIFIC site, call
+   confirm_availability for it. Steps 1-2 read a periodically-refreshed cache and can
+   be slightly stale (a site shown as open may already be booked); confirm_availability
+   fetches live and refreshes the cache. It is slower, so use it on the final candidate,
+   not for broad browsing.
 
 parkId is provider-prefixed and opaque — always use the value returned by a search/
 list call verbatim; never construct or guess one. Dates are ISO YYYY-MM-DD. This is
@@ -225,6 +230,36 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
+    if (url.pathname === "/api/confirm") {
+      const id = url.searchParams.get("id") || "";
+      const start = url.searchParams.get("start") || "";
+      const nights = Math.max(1, Math.min(30, Number(url.searchParams.get("nights")) || 1));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "bad start date" }));
+        return;
+      }
+      try {
+        const r = await confirmAvailability(id, start, nights);
+        // Count this campground's sites open for the whole [start, start+nights) stay.
+        let siteCount = 0;
+        for (const s of r.sites) {
+          let ok = true;
+          for (let n = 0; n < nights; n++) {
+            const d = new Date(start + "T00:00:00Z");
+            d.setUTCDate(d.getUTCDate() + n);
+            if (!s.available.includes(d.toISOString().slice(0, 10))) { ok = false; break; }
+          }
+          if (ok) siteCount++;
+        }
+        res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(
+          JSON.stringify({ id, available: siteCount > 0, siteCount, harvestedAt: r.harvestedAt, source: "live" }),
+        );
+      } catch (e) {
+        res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
+      }
+      return;
+    }
+
     if (url.pathname === "/api/availability-bulk") {
       const start = url.searchParams.get("start") || "";
       const nights = Math.max(1, Math.min(30, Number(url.searchParams.get("nights")) || 1));
@@ -232,8 +267,11 @@ const httpServer = createServer(async (req, res) => {
         res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "bad start date" }));
         return;
       }
-      res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=300" }).end(
-        JSON.stringify({ start, nights, parks: bulkAvailability(start, nights) }),
+      const since = Math.max(0, Number(url.searchParams.get("since")) || 0);
+      // A delta poll (since>0) must not be cached, or the client would re-see old deltas.
+      const cc = since > 0 ? "no-store" : "public, max-age=300";
+      res.writeHead(200, { "content-type": "application/json", "cache-control": cc }).end(
+        JSON.stringify({ start, nights, serverTime: Date.now(), parks: bulkAvailability(start, nights, since) }),
       );
       return;
     }

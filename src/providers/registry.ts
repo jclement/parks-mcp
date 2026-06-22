@@ -1,7 +1,15 @@
 import { cached, ttlMs } from "../parks/cache.ts";
-import { addDaysISO, albertaProvider, campgroundChildId, computeVacancies, saskParksProvider } from "../parks/service.ts";
+import {
+  addDaysISO,
+  albertaProvider,
+  campgroundChildId,
+  campgroundOf,
+  computeVacancies,
+  saskParksProvider,
+  splitCampgroundId,
+} from "../parks/service.ts";
 import { bcParksProvider, parksCanadaProvider } from "./camis.ts";
-import { campgroundsOf, getCachedAvailability } from "../harvest.ts";
+import { campgroundsOf, getCachedAvailability, refreshHarvestRange } from "../harvest.ts";
 import COORDS from "../data/coords.json";
 
 function daysBetween(a: string, b: string): number {
@@ -118,6 +126,22 @@ export function getAvailability(
     const r = await rawAvailability(parkId, startISO, nights);
     return { ...r, source: "live" } as AvailabilityWithMeta;
   });
+}
+
+/** Live re-check of one campground, bypassing the cache, that also writes the fresh
+ * result back into the harvest store (so the map + future queries self-heal). Returns
+ * the requested campground's per-site availability. */
+export async function confirmAvailability(
+  parkId: string,
+  startISO: string,
+  nights: number,
+): Promise<AvailabilityWithMeta> {
+  const span = Math.max(nights, 14);
+  const { parent, cg } = splitCampgroundId(parkId);
+  const live = await rawAvailability(parent, startISO, span); // all parent sites, live
+  refreshHarvestRange(parent, live.jurisdiction, live.bookingUrl, live.windowStart, live.dates.length, live.sites);
+  const sites = cg ? live.sites.filter((s) => campgroundOf(s.loop) === cg) : live.sites;
+  return { ...live, parkId, sites, source: "live", harvestedAt: Date.now() };
 }
 
 export function findVacancies(
