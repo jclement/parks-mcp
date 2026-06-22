@@ -268,9 +268,11 @@ export const LANDING_HTML = `<!doctype html>
     $("fwrap").classList.toggle("active",prefs.hide||!prefs.front||!prefs.back||prefs.pub);queueHash();}
 
   // ----- map -----
-  let view=[54.5,-119],zoom=5;
-  if(hp.has("m")){const a=hp.get("m").split(",").map(Number);if(a.length>=3&&a.every(x=>!isNaN(x))){view=[a[0],a[1]];zoom=Math.max(3,Math.min(18,a[2]));}}
-  const map=L.map("map",{zoomControl:false,attributionControl:false}).setView(view,zoom);
+  const map=L.map("map",{zoomControl:false,attributionControl:false});
+  const CANADA=[[43,-141],[60,-52]]; // southern band, coast to coast
+  let viewSet=false;
+  if(hp.has("m")){const a=hp.get("m").split(",").map(Number);if(a.length>=3&&a.every(x=>!isNaN(x))){map.setView([a[0],a[1]],Math.max(3,Math.min(18,a[2])));viewSet=true;}}
+  if(!viewSet)map.fitBounds(CANADA);
   L.control.zoom({position:"bottomright"}).addTo(map);
   // keep the URL in sync (debounced) so the current view + filters are bookmarkable
   let hashTimer=null;
