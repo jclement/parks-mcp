@@ -9,4 +9,5 @@ deploy/.env
 deploy/cache/
 *.db
 *.db-*
-.claude/
+.claude/*
+!.claude/skills/
