@@ -510,7 +510,7 @@ export const LANDING_HTML = `<!doctype html>
   // Whole-month grid: defaults to the arrive-date's month, ‹ › pages from this month to
   // the 90-day window edge. Past days greyed, spillover days from other months faded.
   function monthsFromToday(dateStr){const t=new Date();const d=new Date(dateStr+"T00:00:00Z");return (d.getUTCFullYear()-t.getUTCFullYear())*12+(d.getUTCMonth()-t.getUTCMonth());}
-  function renderCal(host,p,offset){
+  function renderCal(host,p,offset,bust){
     const t=new Date(),ty=t.getUTCFullYear(),tm=t.getUTCMonth();
     const lastD=new Date(Date.now()+(WINDOW_DAYS-1)*864e5);
     const maxOff=(lastD.getUTCFullYear()-ty)*12+(lastD.getUTCMonth()-tm);
@@ -527,7 +527,7 @@ export const LANDING_HTML = `<!doctype html>
     host.querySelectorAll(".mnav").forEach(b=>{if(!b.disabled)b.onclick=()=>renderCal(host,p,offset+Number(b.dataset.d));});
     const grid=host.querySelector("[data-grid]");
     if(!prefs.start){grid.innerHTML='<div class="calnote">Set an arrive date ↑ to see availability.</div>';return;}
-    fetch("/api/calendar?id="+encodeURIComponent(p.id)+"&start="+gridStart+"&nights="+prefs.nights+"&days="+days).then(r=>r.json()).then(c=>{
+    fetch("/api/calendar?id="+encodeURIComponent(p.id)+"&start="+gridStart+"&nights="+prefs.nights+"&days="+days+(bust?"&_="+Date.now():"")).then(r=>r.json()).then(c=>{
       if(!c.cells||!c.cells.length){grid.innerHTML='<div class="calnote">No cached availability for this park yet.</div>';return;}
       const wd=["S","M","T","W","T","F","S"].map(d=>'<div class="wd">'+d+'</div>').join("");
       const cells=c.cells.map(x=>{
@@ -540,20 +540,22 @@ export const LANDING_HTML = `<!doctype html>
       grid.innerHTML=wd+cells;
       // If this park's cache is >30 min old, live-refresh it (spinner) so the booking
       // dates you're looking at are current.
-      if(c.harvestedAt&&Date.now()-c.harvestedAt>30*60000&&!p._confirming)maybeConfirm(p,host);
+      if(c.harvestedAt&&Date.now()-c.harvestedAt>30*60000&&!p._confirming&&Date.now()-(p._confirmedAt||0)>300000)maybeConfirm(p,host);
     }).catch(()=>{grid.innerHTML='<div class="calnote">Availability unavailable.</div>';});
   }
   // Live-verify one park, update its dot, and re-render the calendar from the now-fresh cache.
   async function maybeConfirm(p,host){
-    if(p._confirming)return; p._confirming=true;
+    if(p._confirming)return; p._confirming=true; p._confirmedAt=Date.now();
     const lbl=host.querySelector(".mlabel span"); if(lbl&&!lbl.querySelector(".cspin"))lbl.insertAdjacentHTML("beforeend",' <span class="cspin"></span>');
+    const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),45000);
     try{
-      const r=await fetch("/api/confirm?id="+encodeURIComponent(p.id)+"&start="+prefs.start+"&nights="+prefs.nights);
+      const r=await fetch("/api/confirm?id="+encodeURIComponent(p.id)+"&start="+prefs.start+"&nights="+prefs.nights,{signal:ctl.signal});
       const d=await r.json();
       if(d&&typeof d.siteCount==="number"){bulk[p.id]={available:d.available,siteCount:d.siteCount,stale:false};refreshPins();}
-      p._confirming=false;
-      renderCal(host,p,host._offset||0); // re-render from refreshed cache
+      p._confirmedAt=Date.now(); p._confirming=false;
+      renderCal(host,p,host._offset||0,true); // re-render, cache-busted, from the refreshed data
     }catch(e){p._confirming=false;const sp=host.querySelector(".cspin");if(sp)sp.remove();}
+    finally{clearTimeout(to);}
   }
 
   function openParkDetail(p){
