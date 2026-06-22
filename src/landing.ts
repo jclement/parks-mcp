@@ -61,6 +61,9 @@ export const LANDING_HTML = `<!doctype html>
   .fpop .hr{height:1px;background:var(--line);margin:1px 0}
   .fpop .ptag{color:#34d399;font-size:10px;font-weight:600;white-space:nowrap}
   .pubdot{width:9px;height:9px;border-radius:50%;background:#34d399;box-shadow:0 0 0 1.5px #0b0f14;display:inline-block}
+  .theme-btn{width:34px;height:34px;background:var(--panel);border:1px solid var(--line);border-radius:9px;color:var(--ink);
+    display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(6px);box-shadow:0 8px 30px #0007;margin-bottom:8px}
+  .theme-btn:hover{border-color:#3a4d66}
   .search{position:relative;display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);
     border-radius:13px;padding:8px 12px;backdrop-filter:blur(6px);box-shadow:0 8px 30px #0007;flex:1 1 190px;max-width:360px}
   .search svg{flex:none;color:var(--muted)}
@@ -71,10 +74,12 @@ export const LANDING_HTML = `<!doctype html>
   .sresults{position:absolute;top:calc(100% + 6px);left:0;right:0;background:var(--panel);border:1px solid var(--line);
     border-radius:11px;overflow:hidden auto;display:none;box-shadow:0 10px 30px #000a;z-index:1300;max-height:266px}
   .sresults.open{display:block}
-  .sresults button{display:block;width:100%;text-align:left;background:transparent;border:0;border-top:1px solid var(--line);
+  .sresults button{display:flex;align-items:center;width:100%;text-align:left;background:transparent;border:0;border-top:1px solid var(--line);
     color:var(--ink);font-size:13px;padding:8px 11px;cursor:pointer;font-family:inherit;line-height:1.25}
   .sresults button:first-child{border-top:0}
   .sresults button:hover,.sresults button.sel{background:#1a2433}
+  .sresults .sdot{width:8px;height:8px;border-radius:50%;flex:none;margin-right:8px;box-shadow:0 0 0 1.5px #0b0f14}
+  .sresults .sdot.place{background:transparent;box-shadow:inset 0 0 0 2px #64748b}
   .sresults .nm{font-weight:600}
   .sresults .rg{color:var(--muted);font-size:11px}
   .sresults .msg{padding:9px 11px;color:var(--muted);font-size:12.5px}
@@ -247,7 +252,8 @@ export const LANDING_HTML = `<!doctype html>
 
   // ----- prefs -----
   const prefs={start:localStorage.getItem("ce_start")||"",nights:+(localStorage.getItem("ce_nights")||2),hide:localStorage.getItem("ce_hide")==="1",
-    front:localStorage.getItem("ce_front")!=="0",back:localStorage.getItem("ce_back")!=="0",pub:localStorage.getItem("ce_pub")==="1"};
+    front:localStorage.getItem("ce_front")!=="0",back:localStorage.getItem("ce_back")!=="0",pub:localStorage.getItem("ce_pub")==="1",
+    theme:localStorage.getItem("ce_theme")||"dark"};
   // URL hash overrides localStorage so a page can be bookmarked/shared (#m=lat,lng,z&d=date&n=nights&f=flags)
   const hp=new URLSearchParams(location.hash.slice(1));
   if(hp.has("d")&&/^\d{4}-\d{2}-\d{2}$/.test(hp.get("d")))prefs.start=hp.get("d");
@@ -279,7 +285,26 @@ export const LANDING_HTML = `<!doctype html>
   }
   function queueHash(){clearTimeout(hashTimer);hashTimer=setTimeout(writeHash,400);}
   map.on("moveend",queueHash);
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
+  // Basemap themes — dark (default) and a lighter, more legible Voyager map.
+  const TILES={
+    dark:"https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+    light:"https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png",
+  };
+  const SUN='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19"/></svg>';
+  const MOON='<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M21 12.8A8.5 8.5 0 0111.2 3a7 7 0 109.8 9.8z"/></svg>';
+  let baseLayer=null;
+  function setBasemap(theme){
+    prefs.theme=theme==="light"?"light":"dark";
+    if(baseLayer)baseLayer.remove();
+    baseLayer=L.tileLayer(TILES[prefs.theme],{maxZoom:19,attribution:'&copy; OpenStreetMap &copy; CARTO'}).addTo(map);
+    baseLayer.bringToBack();
+    document.body.classList.toggle("lightmap",prefs.theme==="light");
+    localStorage.setItem("ce_theme",prefs.theme);
+    const b=$("themeBtn"); if(b)b.innerHTML=prefs.theme==="light"?MOON:SUN;
+  }
+  const ThemeCtl=L.Control.extend({onAdd:function(){const b=L.DomUtil.create("button","theme-btn");b.id="themeBtn";b.title="Toggle map theme";b.innerHTML=prefs.theme==="light"?MOON:SUN;L.DomEvent.disableClickPropagation(b);L.DomEvent.on(b,"click",()=>setBasemap(prefs.theme==="light"?"dark":"light"));return b;}});
+  new ThemeCtl({position:"bottomright"}).addTo(map);
+  setBasemap(prefs.theme);
 
   function icon(p,status){
     const c=COLOR[p.j]||"#64748b",back=p.t==="backcountry",s=back?12:13;
@@ -367,28 +392,48 @@ export const LANDING_HTML = `<!doctype html>
   $("fpop").addEventListener("click",ev=>ev.stopPropagation());
   document.addEventListener("click",()=>$("fpop").classList.remove("open"));
 
-  // ----- place search (geocode → fly the map) -----
+  // ----- search: our campgrounds (instant) blended with geocoded places -----
   const sInput=$("searchInput"),sRes=$("sresults"),sWrap=$("searchWrap");
   let sTimer=null,sHits=[],sSel=-1;
   function flyTo(h){
     if(h.bbox)map.fitBounds([[h.bbox[0],h.bbox[2]],[h.bbox[1],h.bbox[3]]],{maxZoom:13,padding:[40,40]});
-    else map.setView([h.lat,h.lng],11);
+    else map.setView([h.lat,h.lng],h.kind==="pin"?13:11);
   }
   function closeRes(){sRes.classList.remove("open");sSel=-1;}
+  // Rank our pins: name starts-with the query beats a mid-name match.
+  function localMatches(q){
+    const nq=q.toLowerCase();
+    return entries
+      .filter(e=>e.p.lat!=null&&e.p.name.toLowerCase().includes(nq))
+      .sort((a,b)=>(a.p.name.toLowerCase().startsWith(nq)?0:1)-(b.p.name.toLowerCase().startsWith(nq)?0:1)||a.p.name.localeCompare(b.p.name))
+      .slice(0,6)
+      .map(e=>({kind:"pin",name:e.p.name,lat:e.p.lat,lng:e.p.lng,j:e.p.j,entry:e}));
+  }
   function renderRes(){
-    if(!sHits.length){sRes.innerHTML='<div class="msg">No matches.</div>';}
-    else sRes.innerHTML=sHits.map((h,i)=>{const parts=h.name.split(", ");const rg=parts.slice(1,3).join(", ");
-      return '<button data-i="'+i+'"><span class="nm">'+esc(parts[0])+'</span>'+(rg?' <span class="rg">'+esc(rg)+'</span>':'')+'</button>';}).join("");
+    if(!sHits.length){sRes.innerHTML='<div class="msg">No matches.</div>';sRes.classList.add("open");return;}
+    sRes.innerHTML=sHits.map((h,i)=>{
+      if(h.kind==="pin")return '<button data-i="'+i+'"><i class="sdot" style="background:'+(COLOR[h.j]||"#64748b")+'"></i><span class="nm">'+esc(h.name)+'</span></button>';
+      const parts=h.name.split(", ");const rg=parts.slice(1,3).join(", ");
+      return '<button data-i="'+i+'"><i class="sdot place"></i><span class="nm">'+esc(parts[0])+'</span>'+(rg?' <span class="rg">'+esc(rg)+'</span>':'')+'</button>';
+    }).join("");
     sRes.classList.add("open");
   }
   async function doSearch(q){
-    try{const r=await fetch("/api/geocode?q="+encodeURIComponent(q));const d=await r.json();sHits=d.hits||[];sSel=-1;renderRes();}catch(e){sHits=[];closeRes();}
+    try{const r=await fetch("/api/geocode?q="+encodeURIComponent(q));const d=await r.json();
+      const places=(d.hits||[]).map(h=>({kind:"place",name:h.name,lat:h.lat,lng:h.lng,bbox:h.bbox}));
+      sHits=[...localMatches(q),...places].slice(0,9);sSel=-1;renderRes();
+    }catch(e){/* keep the instant local matches */}
   }
-  function pick(h){flyTo(h);sInput.value=h.name.split(", ")[0];closeRes();sInput.blur();}
+  function pick(h){
+    if(h.kind==="pin"){map.setView([h.lat,h.lng],Math.max(map.getZoom(),13));if(h.entry&&map.hasLayer(h.entry.m))h.entry.m.openPopup();sInput.value=h.name;}
+    else{flyTo(h);sInput.value=h.name.split(", ")[0];}
+    closeRes();sInput.blur();
+  }
   sInput.addEventListener("input",()=>{
     const q=sInput.value.trim();sWrap.classList.toggle("has",!!q);clearTimeout(sTimer);
     if(q.length<2){closeRes();sHits=[];return;}
-    sTimer=setTimeout(()=>doSearch(q),320);
+    sHits=localMatches(q);renderRes();      // instant park matches
+    sTimer=setTimeout(()=>doSearch(q),320); // then blend in geocoded places
   });
   sInput.addEventListener("keydown",ev=>{
     if((ev.key==="ArrowDown"||ev.key==="ArrowUp")&&sHits.length){ev.preventDefault();
