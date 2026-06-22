@@ -16,7 +16,7 @@ import { APPLE_TOUCH_ICON_PNG, FAVICON_PNG, ICON_192_PNG, ICON_512_PNG, ICON_SVG
 const MANIFEST = JSON.stringify({
   name: "Campground Map",
   short_name: "Campgrounds",
-  description: "Camping availability across Alberta, BC, and Parks Canada",
+  description: "Camping availability across Alberta, BC, Saskatchewan, and Parks Canada",
   start_url: "/",
   scope: "/",
   display: "standalone",
@@ -46,7 +46,7 @@ const MCP_PATH = process.env.MCP_PATH ?? "/mcp";
 // Active sessions: an `initialize` mints one; later requests carry mcp-session-id.
 const transports = new Map<string, StreamableHTTPServerTransport>();
 
-const INSTRUCTIONS = `Camping reservation search across Alberta Parks, BC Parks, and Parks Canada
+const INSTRUCTIONS = `Camping reservation search across Alberta Parks, BC Parks, Saskatchewan Parks, and Parks Canada
 (includes backcountry zones and trails like the West Coast Trail).
 
 Typical flow:

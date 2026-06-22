@@ -141,6 +141,24 @@ export const LANDING_HTML = `<!doctype html>
   .cal .wd{font-size:9px;color:#94a3b8;text-align:center}
   .cal .d{aspect-ratio:1;border-radius:4px;font-size:10px;display:flex;align-items:center;justify-content:center;color:#1e293b;background:#e5e7eb}
   .cal .d.g{background:#86efac}.cal .d.r{background:#fecaca}.cal .d.none{background:#f1f5f9;color:#cbd5e1}
+  .cal .d.past{background:#eef1f4;color:#b8c2cc}
+  .cal .d.out{background:transparent;color:#cbd5e1;opacity:.4}
+  .cal .d.sel{outline:2px solid #fff;outline-offset:-2px;font-weight:700}
+  .cal .mlabel{align-items:center;font-size:12px;color:#cbd5e1}
+  .cal .mnav{background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:7px;width:26px;height:22px;cursor:pointer;font-size:14px;line-height:1;padding:0}
+  .cal .mnav:disabled{opacity:.3;cursor:default}
+  .cal .calnote{grid-column:1/-1;font-size:11px;color:#64748b;padding:6px 2px}
+  /* detail panel — replaces Leaflet popups (mobile = full-screen, desktop = floating card) */
+  .detail{position:fixed;z-index:1600;display:none}
+  .detail.on{display:block}
+  .detail .dcard{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(8px);box-shadow:0 14px 44px #000b;padding:15px 16px}
+  .detail .dclose{position:absolute;top:9px;right:10px;width:27px;height:27px;border-radius:50%;border:1px solid var(--line);background:var(--bg);color:var(--muted);cursor:pointer;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center}
+  .detail .dclose:hover{color:var(--ink)}
+  .detail .dbody{overflow-y:auto}
+  .detail .dname{font-size:16px;font-weight:700;display:block;padding-right:30px;line-height:1.25}
+  .detail .dtags{margin:5px 0 2px}
+  @media(min-width:561px){ .detail{left:12px;bottom:12px;width:344px;max-width:calc(100vw - 24px)} .detail .dbody{max-height:min(72vh,560px)} }
+  @media(max-width:560px){ .detail{inset:0} .detail .dcard{height:100%;border:0;border-radius:0;padding:48px 16px 18px;display:flex;flex-direction:column} .detail .dbody{flex:1;max-height:none} .detail .dclose{top:11px;right:13px;width:36px;height:36px;font-size:16px} }
   .leaflet-container{background:#0b0f14}
 </style>
 </head>
@@ -195,10 +213,11 @@ export const LANDING_HTML = `<!doctype html>
   <span><i class="ring r"></i>full</span>
 </div></div>
 <div class="mhint" id="mhint"></div>
+<div class="detail" id="detail"><div class="dcard"><button class="dclose" id="dclose" aria-label="Close">✕</button><div class="dbody" id="dbody"></div></div></div>
 
 <div class="modal" id="welcome"><div class="card">
   <h2><img src="/favicon.svg" alt="">Camp, Eh?</h2>
-  <p>Campsite availability across <b>Alberta Parks</b>, <b>BC Parks</b>, and <b>Parks Canada</b> — including backcountry and trails like the West Coast Trail — on one map.</p>
+  <p>Campsite availability across <b>Alberta Parks</b>, <b>BC Parks</b>, <b>Saskatchewan Parks</b>, and <b>Parks Canada</b> — including backcountry and trails like the West Coast Trail, plus free Crown-land sites — on one map.</p>
   <ul>
     <li>Pick an <b>arrive date + nights</b> up top.</li>
     <li>The map <b>lights up</b>: green = open, red = full, orange = a bit stale, grey = data still filling deeper for that date.</li>
@@ -246,6 +265,7 @@ export const LANDING_HTML = `<!doctype html>
   const esc=s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   const iso=d=>d.toISOString().slice(0,10);
   const addDays=(s,n)=>{const[y,m,d]=s.split("-").map(Number);const t=new Date(Date.UTC(y,m-1,d));t.setUTCDate(t.getUTCDate()+n);return iso(t)};
+  const todayISO=iso(new Date()); const WINDOW_DAYS=90;
   const entries=[]; const entryById={};
   let bulk={}; let parkCount=0;
 
@@ -348,21 +368,11 @@ export const LANDING_HTML = `<!doctype html>
   const pubLayer=L.layerGroup();   // free-camp points
   const zoneLayer=L.layerGroup();  // Crown-land "camping allowed/pass" zones
   let pubLoaded=false,zoneLoaded=false;
-  function pubPopup(s){
-    const ll=s.lat.toFixed(5)+", "+s.lng.toFixed(5);
-    return '<b>'+esc(s.name)+'</b><br><span class="tag">▲ '+esc(s.source)+(s.town?' · '+esc(s.town):'')+'</span>'+
-      (s.sites?'<div class="muted" style="font-size:12px;margin-top:3px">'+s.sites+' designated site'+(s.sites>1?'s':'')+'</div>':'')+
-      '<div class="muted" style="font-size:12px;margin-top:3px">Free · first-come, first-served. Check local rules &amp; fire bans.</div>'+
-      '<div class="ll"><span>'+ll+'</span><button data-ll="'+ll+'">copy</button></div>'+
-      '<a class="book" href="https://www.google.com/maps/search/?api=1&query='+s.lat+','+s.lng+'" target="_blank" rel="noopener">Directions →</a>';
-  }
   function loadPubPoints(){
     return fetch("/api/publiclands").then(r=>r.json()).then(d=>{
       for(const s of (d.sites||[])){
-        const mk=L.circleMarker([s.lat,s.lng],{renderer:pubRenderer,radius:4,weight:1,color:"#0b0f14",fillColor:"#34d399",fillOpacity:.9}).bindPopup(pubPopup(s));
-        mk.on("popupopen",()=>{const el=mk.getPopup().getElement();const b=el&&el.querySelector(".ll button");
-          if(b&&!b._w){b._w=1;b.addEventListener("click",()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.ll).then(()=>b.textContent="copied");});}});
-        mk.addTo(pubLayer);
+        L.circleMarker([s.lat,s.lng],{renderer:pubRenderer,radius:4,weight:1,color:"#0b0f14",fillColor:"#34d399",fillOpacity:.9})
+          .on("click",()=>openPubDetail(s)).addTo(pubLayer);
       }
       pubLoaded=true;
     }).catch(()=>{});
@@ -426,7 +436,7 @@ export const LANDING_HTML = `<!doctype html>
     }catch(e){/* keep the instant local matches */}
   }
   function pick(h){
-    if(h.kind==="pin"){map.setView([h.lat,h.lng],Math.max(map.getZoom(),13));if(h.entry&&map.hasLayer(h.entry.m))h.entry.m.openPopup();sInput.value=h.name;}
+    if(h.kind==="pin"){map.setView([h.lat,h.lng],Math.max(map.getZoom(),13));if(h.entry)openParkDetail(h.entry.p);sInput.value=h.name;}
     else{flyTo(h);sInput.value=h.name.split(", ")[0];}
     closeRes();sInput.blur();
   }
@@ -449,24 +459,70 @@ export const LANDING_HTML = `<!doctype html>
   document.addEventListener("click",ev=>{if(!sWrap.contains(ev.target))closeRes();});
   queueHash();
 
-  // ----- popup w/ mini-month -----
-  function popupShell(p){
+  // ----- detail panel (mobile full-screen, desktop floating card) -----
+  function openDetail(){$("detail").classList.add("on");}
+  function closeDetail(){$("detail").classList.remove("on");}
+  $("dclose").onclick=closeDetail;
+  map.on("click",closeDetail);
+  document.addEventListener("keydown",ev=>{if(ev.key==="Escape")closeDetail();});
+  function wireCopy(scope){const b=scope.querySelector(".ll button");if(b&&!b._w){b._w=1;b.addEventListener("click",()=>{navigator.clipboard&&navigator.clipboard.writeText(b.dataset.ll).then(()=>b.textContent="copied");});}}
+  function descSet(el,info){ if(info&&info.description){el.className="desc";el.textContent=info.description;} else {el.className="desc muted";el.textContent="No description.";} }
+
+  // ----- navigable mini-month calendar -----
+  // Whole-month grid: defaults to the arrive-date's month, ‹ › pages from this month to
+  // the 90-day window edge. Past days greyed, spillover days from other months faded.
+  function monthsFromToday(dateStr){const t=new Date();const d=new Date(dateStr+"T00:00:00Z");return (d.getUTCFullYear()-t.getUTCFullYear())*12+(d.getUTCMonth()-t.getUTCMonth());}
+  function renderCal(host,p,offset){
+    const t=new Date(),ty=t.getUTCFullYear(),tm=t.getUTCMonth();
+    const lastD=new Date(Date.now()+(WINDOW_DAYS-1)*864e5);
+    const maxOff=(lastD.getUTCFullYear()-ty)*12+(lastD.getUTCMonth()-tm);
+    offset=Math.max(0,Math.min(maxOff,offset));
+    const first=new Date(Date.UTC(ty,tm+offset,1)),y=first.getUTCFullYear(),mo=first.getUTCMonth();
+    const fw=first.getUTCDay(),dim=new Date(Date.UTC(y,mo+1,0)).getUTCDate();
+    const days=Math.ceil((fw+dim)/7)*7,gridStart=iso(new Date(Date.UTC(y,mo,1-fw)));
+    const label=first.toLocaleDateString("en-CA",{month:"long",year:"numeric",timeZone:"UTC"});
+    host.innerHTML='<div class="mlabel">'+
+      '<button class="mnav" data-d="-1"'+(offset<=0?' disabled':'')+' aria-label="Previous month">‹</button>'+
+      '<span>'+label+' · '+prefs.nights+'n stays</span>'+
+      '<button class="mnav" data-d="1"'+(offset>=maxOff?' disabled':'')+' aria-label="Next month">›</button></div>'+
+      '<div class="grid" data-grid></div>';
+    host.querySelectorAll(".mnav").forEach(b=>{if(!b.disabled)b.onclick=()=>renderCal(host,p,offset+Number(b.dataset.d));});
+    const grid=host.querySelector("[data-grid]");
+    if(!prefs.start){grid.innerHTML='<div class="calnote">Set an arrive date ↑ to see availability.</div>';return;}
+    fetch("/api/calendar?id="+encodeURIComponent(p.id)+"&start="+gridStart+"&nights="+prefs.nights+"&days="+days).then(r=>r.json()).then(c=>{
+      const wd=["S","M","T","W","T","F","S"].map(d=>'<div class="wd">'+d+'</div>').join("");
+      const cells=(c.cells||[]).map(x=>{
+        const day=+x.date.slice(8,10),inMonth=new Date(x.date+"T00:00:00Z").getUTCMonth()===mo,past=x.date<todayISO;
+        let cls=!inMonth?"out":past?"past":x.siteCount<0?"none":x.available?"g":"r";
+        const sel=(x.date===prefs.start)?" sel":"";
+        const tip=x.date+(inMonth&&!past&&x.siteCount>=0?" · "+x.siteCount+" open":"");
+        return '<div class="d '+cls+sel+'" title="'+tip+'">'+day+'</div>';
+      }).join("");
+      grid.innerHTML=wd+cells;
+    }).catch(()=>{grid.innerHTML='<div class="calnote">Availability unavailable.</div>';});
+  }
+
+  function openParkDetail(p){
     const ll=p.lat.toFixed(5)+", "+p.lng.toFixed(5);
-    return '<b>'+esc(p.name)+'</b><br><span class="tag">'+esc(p.j)+(p.t==="backcountry"?" · backcountry":"")+'</span>'+
+    $("dbody").innerHTML='<b class="dname">'+esc(p.name)+'</b>'+
+      '<div class="dtags"><span class="tag">'+esc(p.j)+(p.t==="backcountry"?" · backcountry":"")+'</span></div>'+
       '<div class="ll"><span>'+ll+'</span><button data-ll="'+ll+'">copy</button></div>'+
       '<a class="book" href="'+esc(p.url)+'" target="_blank" rel="noopener">Book / official site →</a>'+
-      '<div class="cal" data-cal></div><div class="desc muted" data-desc>Loading…</div>';
+      '<div class="cal" id="dcal"></div><div class="desc muted" id="ddesc">Loading…</div>';
+    openDetail(); wireCopy($("dbody"));
+    renderCal($("dcal"),p,prefs.start?monthsFromToday(prefs.start):0);
+    if(p._info!==undefined)descSet($("ddesc"),p._info);
+    else fetch("/api/campground?id="+encodeURIComponent(p.id)).then(r=>r.ok?r.json():null).then(info=>{p._info=info;const dd=$("ddesc");if(dd)descSet(dd,info);}).catch(()=>{});
   }
-  function renderCal(host,p){
-    if(!prefs.start){host.innerHTML='<div class="mlabel">Set dates to see the month.</div>';return;}
-    const gridStart=addDays(prefs.start,-(new Date(prefs.start+"T00:00:00Z").getUTCDay()));
-    fetch("/api/calendar?id="+encodeURIComponent(p.id)+"&start="+gridStart+"&nights="+prefs.nights+"&days=42").then(r=>r.json()).then(c=>{
-      if(!c.harvested){host.innerHTML='<div class="mlabel">No cached availability yet.</div>';return;}
-      const wd=["S","M","T","W","T","F","S"].map(d=>'<div class="wd">'+d+'</div>').join("");
-      const cells=c.cells.map(x=>{const day=+x.date.slice(8,10);const cls=x.siteCount<0?"none":x.available?"g":"r";return '<div class="d '+cls+'" title="'+x.date+(x.siteCount>=0?" · "+x.siteCount+" open":"")+'">'+day+'</div>';}).join("");
-      const m=new Date(prefs.start+"T00:00:00Z").toLocaleDateString("en-CA",{month:"long",timeZone:"UTC"});
-      host.innerHTML='<div class="mlabel"><span>'+m+' — '+prefs.nights+'n stays</span>'+(c.stale?'<span style="color:#f59e0b">stale</span>':'')+'</div><div class="grid">'+wd+cells+'</div>';
-    }).catch(()=>{host.innerHTML='';});
+  function openPubDetail(s){
+    const ll=s.lat.toFixed(5)+", "+s.lng.toFixed(5);
+    $("dbody").innerHTML='<b class="dname">'+esc(s.name)+'</b>'+
+      '<div class="dtags"><span class="tag">▲ '+esc(s.source)+(s.town?" · "+esc(s.town):"")+'</span></div>'+
+      (s.sites?'<div class="muted" style="font-size:12px;margin-top:4px">'+s.sites+' designated site'+(s.sites>1?'s':'')+'</div>':'')+
+      '<div class="muted" style="font-size:12px;margin-top:4px">Free · first-come, first-served. Check local rules &amp; fire bans.</div>'+
+      '<div class="ll"><span>'+ll+'</span><button data-ll="'+ll+'">copy</button></div>'+
+      '<a class="book" href="https://www.google.com/maps/search/?api=1&query='+s.lat+','+s.lng+'" target="_blank" rel="noopener">Directions →</a>';
+    openDetail(); wireCopy($("dbody"));
   }
 
   // ----- load pins -----
@@ -474,21 +530,11 @@ export const LANDING_HTML = `<!doctype html>
     const r=await fetch("/api/campgrounds"); if(!r.ok)throw new Error("map data unavailable");
     const d=await r.json(); const grp=[];
     for(const p of d.pins){
-      const m=L.marker([p.lat,p.lng],{icon:icon(p,null)}).bindPopup(popupShell(p));
+      const m=L.marker([p.lat,p.lng],{icon:icon(p,null)});
       const e={m,p,status:null}; entries.push(e); entryById[p.id]=e;
-      m.on("popupopen",()=>{
-        const el=m.getPopup().getElement(); if(!el)return;
-        const cb=el.querySelector("[data-ll] , .ll button"); const btn=el.querySelector(".ll button");
-        if(btn&&!btn._w){btn._w=1;btn.addEventListener("click",()=>{navigator.clipboard&&navigator.clipboard.writeText(btn.dataset.ll).then(()=>btn.textContent="copied");});}
-        renderCal(el.querySelector("[data-cal]"),p);
-        const desc=el.querySelector("[data-desc]");
-        if(m._info!==undefined){descSet(desc,m._info);}
-        else fetch("/api/campground?id="+encodeURIComponent(p.id)).then(r=>r.ok?r.json():null).then(info=>{m._info=info;const d2=m.getPopup()&&m.getPopup().getElement()&&m.getPopup().getElement().querySelector("[data-desc]");if(d2)descSet(d2,info);}).catch(()=>{});
-      });
+      m.on("click",()=>openParkDetail(p));
       m.addTo(map); grp.push(m);
     }
-    function descSet(el,info){ if(info&&info.description){el.className="desc";el.textContent=info.description;} else {el.className="desc muted";el.textContent="No description.";} }
-    window.descSet=descSet;
     parkCount=d.count; $("sub").textContent=parkCount+" parks";
     // Initial view is set once up front: #m=lat,lng,z from the URL, else all of Canada.
     // Don't re-fit to pins here — that would override a bookmarked position/zoom.
