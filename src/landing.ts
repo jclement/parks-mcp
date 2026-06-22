@@ -361,10 +361,21 @@ export const LANDING_HTML = `<!doctype html>
     try{const r=await fetch("/api/availability-bulk?start="+prefs.start+"&nights="+prefs.nights);const d=await r.json();bulk=d.parks||{};bulkServerTime=d.serverTime||0;}catch(e){bulk={};}
     refreshPins();
   }
-  // Live dot refresh: every few minutes pull ONLY parks re-harvested since our last
-  // fetch (server delta) and redraw just those dots — no full-map flicker.
+  // Live dot refresh — SSE pushes just-changed dots the instant the server's cache updates
+  // (harvest or anyone's confirm); diff-render means no full-map flicker. The 5-min delta
+  // poll is a fallback for when the stream isn't connected.
+  let es=null,sseOpen=false;
+  function startLive(){
+    if(es){es.close();es=null;}
+    sseOpen=false;
+    if(!prefs.start||typeof EventSource==="undefined")return;
+    es=new EventSource("/api/live?start="+prefs.start+"&nights="+prefs.nights);
+    es.onopen=()=>{sseOpen=true;};
+    es.onerror=()=>{sseOpen=false;}; // EventSource auto-reconnects; pollBulk covers the gap
+    es.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.parks&&Object.keys(d.parks).length){Object.assign(bulk,d.parks);refreshPins();}}catch(e){}};
+  }
   async function pollBulk(){
-    if(!prefs.start||!bulkServerTime)return;
+    if(sseOpen||!prefs.start||!bulkServerTime)return;
     try{
       const r=await fetch("/api/availability-bulk?start="+prefs.start+"&nights="+prefs.nights+"&since="+bulkServerTime);
       const d=await r.json(); if(d.serverTime)bulkServerTime=d.serverTime;
@@ -372,7 +383,7 @@ export const LANDING_HTML = `<!doctype html>
     }catch(e){}
   }
   setInterval(pollBulk, 5*60*1000);
-  function onPrefsChanged(){savePrefs();lightUp();}
+  function onPrefsChanged(){savePrefs();lightUp();startLive();}
   elStart.onchange=onPrefsChanged; elNights.onchange=onPrefsChanged;
   for(const el of [elHide,elFront,elBack])el.onchange=()=>{savePrefs();refreshPins();};
   elPublic.onchange=()=>{savePrefs();syncPublic();};
@@ -571,6 +582,7 @@ export const LANDING_HTML = `<!doctype html>
     // Initial view is set once up front: #m=lat,lng,z from the URL, else all of Canada.
     // Don't re-fit to pins here — that would override a bookmarked position/zoom.
     await lightUp();
+    startLive();
   }catch(e){$("sub").textContent="data unavailable";}
 
   // ----- modals -----

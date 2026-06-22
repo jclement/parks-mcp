@@ -8,7 +8,7 @@ import { LANDING_HTML } from "./landing.ts";
 import { campgroundInfo, checkAvailability, confirmAvailability, geocodeSearch, listCampgrounds } from "./providers/registry.ts";
 import { publicLands, publicZones } from "./providers/publiclands.ts";
 import { startHarvester } from "./harvester.ts";
-import { bulkAvailability, calendar as harvestCalendar, dbSizes, harvestStatus, parkStatuses, statusByJurisdiction, windowInfo } from "./harvest.ts";
+import { bulkAvailability, calendar as harvestCalendar, dbSizes, harvestStatus, onHarvestUpdate, parkAvailability, parkStatuses, statusByJurisdiction, windowInfo } from "./harvest.ts";
 import { harvestEvents, mcpStats } from "./stats.ts";
 import { DASHBOARD_HTML } from "./dashboard.ts";
 import { APPLE_TOUCH_ICON_PNG, FAVICON_PNG, ICON_192_PNG, ICON_512_PNG, ICON_SVG } from "./icons.ts";
@@ -65,6 +65,39 @@ Typical flow:
 parkId is provider-prefixed and opaque — always use the value returned by a search/
 list call verbatim; never construct or guess one. Dates are ISO YYYY-MM-DD. This is
 read-only: it reports availability and booking-page URLs but does not make bookings.`;
+
+// ---- live availability push (SSE) ----
+// One open response per connected map. When a park's cache changes (harvest or a user's
+// confirm), push just that park's dot(s) to every client at their selected date/nights.
+interface LiveClient {
+  res: ServerResponse;
+  start: string;
+  nights: number;
+}
+const liveClients = new Set<LiveClient>();
+function pushToLive(parkId: string): void {
+  if (liveClients.size === 0) return;
+  for (const c of liveClients) {
+    try {
+      const parks = parkAvailability(parkId, c.start, c.nights);
+      if (Object.keys(parks).length) c.res.write(`data:${JSON.stringify({ parks })}\n\n`);
+    } catch {
+      liveClients.delete(c);
+    }
+  }
+}
+onHarvestUpdate(pushToLive);
+// Heartbeat keeps the stream alive through proxies/the tunnel and prunes dead clients.
+const liveHeartbeat = setInterval(() => {
+  for (const c of liveClients) {
+    try {
+      c.res.write(":hb\n\n");
+    } catch {
+      liveClients.delete(c);
+    }
+  }
+}, 25000);
+if (typeof liveHeartbeat === "object" && "unref" in liveHeartbeat) liveHeartbeat.unref();
 
 function buildServer(): McpServer {
   const server = new McpServer(
@@ -257,6 +290,26 @@ const httpServer = createServer(async (req, res) => {
       } catch (e) {
         res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
       }
+      return;
+    }
+
+    if (url.pathname === "/api/live") {
+      const start = url.searchParams.get("start") || "";
+      const nights = Math.max(1, Math.min(30, Number(url.searchParams.get("nights")) || 1));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+        res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ error: "bad start date" }));
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "text/event-stream",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      res.write(":ok\n\n");
+      const client: LiveClient = { res, start, nights };
+      liveClients.add(client);
+      req.on("close", () => liveClients.delete(client));
       return;
     }
 

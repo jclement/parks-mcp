@@ -66,6 +66,23 @@ export function harvestEnabled(): boolean {
   return db != null;
 }
 
+// Notify listeners (the SSE layer) whenever a park's cached availability changes, so the
+// map can push just-changed dots live instead of polling.
+const harvestListeners = new Set<(parkId: string) => void>();
+export function onHarvestUpdate(cb: (parkId: string) => void): () => void {
+  harvestListeners.add(cb);
+  return () => harvestListeners.delete(cb);
+}
+function emitHarvest(parkId: string): void {
+  for (const cb of harvestListeners) {
+    try {
+      cb(parkId);
+    } catch {
+      /* a bad listener must not break harvesting */
+    }
+  }
+}
+
 function daysBetween(a: string, b: string): number {
   const [y1, m1, d1] = a.split("-").map(Number);
   const [y2, m2, d2] = b.split("-").map(Number);
@@ -112,6 +129,7 @@ export function storeHarvest(
     );
   });
   tx();
+  emitHarvest(parkId);
 }
 
 /** Merge a live re-check of [rangeStart, rangeStart+rangeDays) into an existing harvest,
@@ -154,6 +172,7 @@ export function refreshHarvestRange(
     db!.run("UPDATE park_meta SET updated = ? WHERE parkId = ?", [Date.now(), parentId]);
   });
   tx();
+  emitHarvest(parentId);
 }
 
 export function storeError(parkId: string, message: string): void {
@@ -231,53 +250,64 @@ export function getCachedAvailability(
   };
 }
 
-/** Map light-up: for every harvested park, is a stay of `nights` from `startISO`
- * available, and is the data stale? */
-export function bulkAvailability(
-  startISO: string,
-  nights: number,
-  since = 0,
-): Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> {
-  if (!db) return {};
-  // `since` (ms) returns only parks re-harvested after that time — a cheap delta for the
-  // map's live poll, so unchanged dots aren't re-sent.
-  const metas = db
-    .query("SELECT parkId, windowStart, windowDays, updated, occupancy FROM park_meta WHERE ok = 1 AND updated > ?")
-    .all(since) as {
-    parkId: string; windowStart: string; windowDays: number | null; updated: number; occupancy: number | null;
+type BulkEntry = { available: boolean; siteCount: number; stale: boolean; pending?: boolean };
+type MetaLite = { parkId: string; windowStart: string; windowDays: number | null; updated: number; occupancy: number | null };
+
+/** Campground entries for one park (split into per-campground children where needed). */
+function entriesForMeta(m: MetaLite, startISO: string, nights: number): Record<string, BulkEntry> {
+  const out: Record<string, BulkEntry> = {};
+  const offset = daysBetween(m.windowStart, startISO);
+  if (offset < 0) return out; // date is in the past / before this harvest's window
+  const rows = db!.query("SELECT loop, bits FROM site_avail WHERE parkId = ?").all(m.parkId) as {
+    loop: string | null; bits: Uint8Array;
   }[];
-  const out: Record<string, { available: boolean; siteCount: number; stale: boolean; pending?: boolean }> = {};
-  const siteStmt = db.query("SELECT loop, bits FROM site_avail WHERE parkId = ?");
-  for (const m of metas) {
-    const offset = daysBetween(m.windowStart, startISO);
-    if (offset < 0) continue; // date is in the past / before this harvest's window
-    const rows = siteStmt.all(m.parkId) as { loop: string | null; bits: Uint8Array }[];
-    // Group by campground so multi-campground parks (Willow Rock, Bow River…) light up
-    // as separate pins matching the catalogue.
-    const groups = new Map<string, { loop: string | null; bits: Uint8Array }[]>();
-    for (const r of rows) {
-      const cg = campgroundOf(r.loop);
-      (groups.get(cg) ?? groups.set(cg, []).get(cg)!).push(r);
+  // Group by campground so multi-campground parks (Willow Rock, Bow River…) light up
+  // as separate pins matching the catalogue.
+  const groups = new Map<string, { loop: string | null; bits: Uint8Array }[]>();
+  for (const r of rows) {
+    const cg = campgroundOf(r.loop);
+    (groups.get(cg) ?? groups.set(cg, []).get(cg)!).push(r);
+  }
+  const multi = groups.size > 1;
+  const pending = offset + nights > (m.windowDays ?? HARVEST_DAYS);
+  const stale = Date.now() - m.updated > staleAfter(m.parkId, m.occupancy ?? 0);
+  for (const [cg, grp] of groups) {
+    const id = multi ? campgroundChildId(m.parkId, cg) : m.parkId;
+    if (pending) {
+      out[id] = { available: false, siteCount: 0, stale: false, pending: true };
+      continue;
     }
-    const multi = groups.size > 1;
-    const pending = offset + nights > (m.windowDays ?? HARVEST_DAYS);
-    const stale = Date.now() - m.updated > staleAfter(m.parkId, m.occupancy ?? 0);
-    for (const [cg, grp] of groups) {
-      const id = multi ? campgroundChildId(m.parkId, cg) : m.parkId;
-      if (pending) {
-        out[id] = { available: false, siteCount: 0, stale: false, pending: true };
-        continue;
-      }
-      let count = 0;
-      for (const r of grp) {
-        let ok = true;
-        for (let n = 0; n < nights; n++) if (!getBit(r.bits, offset + n)) { ok = false; break; }
-        if (ok) count++;
-      }
-      out[id] = { available: count > 0, siteCount: count, stale };
+    let count = 0;
+    for (const r of grp) {
+      let ok = true;
+      for (let n = 0; n < nights; n++) if (!getBit(r.bits, offset + n)) { ok = false; break; }
+      if (ok) count++;
     }
+    out[id] = { available: count > 0, siteCount: count, stale };
   }
   return out;
+}
+
+/** Map light-up: for every harvested park, is a stay of `nights` from `startISO`
+ * available, and is the data stale? `since` (ms) returns only parks re-harvested after
+ * that time — a cheap delta for the map's live poll/SSE, so unchanged dots aren't re-sent. */
+export function bulkAvailability(startISO: string, nights: number, since = 0): Record<string, BulkEntry> {
+  if (!db) return {};
+  const metas = db
+    .query("SELECT parkId, windowStart, windowDays, updated, occupancy FROM park_meta WHERE ok = 1 AND updated > ?")
+    .all(since) as MetaLite[];
+  const out: Record<string, BulkEntry> = {};
+  for (const m of metas) Object.assign(out, entriesForMeta(m, startISO, nights));
+  return out;
+}
+
+/** Live push: the entries for a single park (used to push just-updated dots over SSE). */
+export function parkAvailability(parkId: string, startISO: string, nights: number): Record<string, BulkEntry> {
+  if (!db) return {};
+  const m = db
+    .query("SELECT parkId, windowStart, windowDays, updated, occupancy FROM park_meta WHERE parkId = ? AND ok = 1")
+    .get(parkId) as MetaLite | null;
+  return m ? entriesForMeta(m, startISO, nights) : {};
 }
 
 /** Mini-month: for each of `days` days from startISO, is a stay of `nights` available? */
