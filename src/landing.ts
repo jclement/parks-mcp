@@ -87,6 +87,7 @@ export const LANDING_HTML = `<!doctype html>
     background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:9px 20px;backdrop-filter:blur(6px)}
   .legend .keys{display:flex;gap:7px 13px;flex-wrap:wrap;justify-content:center;align-items:center;font-size:12.5px;color:#e8eef5}
   .legend .keys span{display:flex;align-items:center;gap:5px;white-space:nowrap}
+  .legend .keys span:has(.ring){gap:9px}
   .keys b{color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.06em;font-weight:700}
   .keys .vsep{width:1px;height:16px;background:var(--line);margin:0 3px}
   .dot{width:11px;height:11px;border-radius:50%;box-shadow:0 0 0 1.5px #0b0f14}
@@ -192,8 +193,6 @@ export const LANDING_HTML = `<!doctype html>
   <b>Avail</b>
   <span><i class="ring g"></i>open</span>
   <span><i class="ring r"></i>full</span>
-  <span><i class="ring o"></i>stale</span>
-  <span><i class="ring p"></i>filling</span>
 </div></div>
 <div class="mhint" id="mhint"></div>
 
