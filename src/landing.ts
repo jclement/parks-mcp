@@ -490,7 +490,8 @@ export const LANDING_HTML = `<!doctype html>
     function descSet(el,info){ if(info&&info.description){el.className="desc";el.textContent=info.description;} else {el.className="desc muted";el.textContent="No description.";} }
     window.descSet=descSet;
     parkCount=d.count; $("sub").textContent=parkCount+" parks";
-    if(grp.length)map.fitBounds(L.featureGroup(grp).getBounds().pad(0.05));
+    // Initial view is set once up front: #m=lat,lng,z from the URL, else all of Canada.
+    // Don't re-fit to pins here — that would override a bookmarked position/zoom.
     await lightUp();
   }catch(e){$("sub").textContent="data unavailable";}
 
