@@ -490,8 +490,9 @@ export const LANDING_HTML = `<!doctype html>
     const grid=host.querySelector("[data-grid]");
     if(!prefs.start){grid.innerHTML='<div class="calnote">Set an arrive date ↑ to see availability.</div>';return;}
     fetch("/api/calendar?id="+encodeURIComponent(p.id)+"&start="+gridStart+"&nights="+prefs.nights+"&days="+days).then(r=>r.json()).then(c=>{
+      if(!c.cells||!c.cells.length){grid.innerHTML='<div class="calnote">No cached availability for this park yet.</div>';return;}
       const wd=["S","M","T","W","T","F","S"].map(d=>'<div class="wd">'+d+'</div>').join("");
-      const cells=(c.cells||[]).map(x=>{
+      const cells=c.cells.map(x=>{
         const day=+x.date.slice(8,10),inMonth=new Date(x.date+"T00:00:00Z").getUTCMonth()===mo,past=x.date<todayISO;
         let cls=!inMonth?"out":past?"past":x.siteCount<0?"none":x.available?"g":"r";
         const sel=(x.date===prefs.start)?" sel":"";
