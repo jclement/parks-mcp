@@ -77,12 +77,14 @@ interface LiveClient {
 const liveClients = new Set<LiveClient>();
 function pushToLive(parkId: string): void {
   if (liveClients.size === 0) return;
+  const serverTime = Date.now(); // every data frame carries the cursor so a later poll fallback can't refetch a giant delta
   for (const c of liveClients) {
     try {
       const parks = parkAvailability(parkId, c.start, c.nights);
-      if (Object.keys(parks).length) c.res.write(`data:${JSON.stringify({ parks })}\n\n`);
+      if (Object.keys(parks).length) c.res.write(`data:${JSON.stringify({ serverTime, parks })}\n\n`);
     } catch {
       liveClients.delete(c);
+      console.warn(`live: dropped a client on push, clients=${liveClients.size}`);
     }
   }
 }
@@ -179,6 +181,12 @@ async function handleMcp(req: IncomingMessage, res: ServerResponse) {
 
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  // Access log: one line per request (fires once, incl. SSE on close). Non-200s become visible.
+  const t0 = Date.now();
+  res.on("finish", () => {
+    if (res.statusCode >= 400 || process.env.HTTP_LOG)
+      console.log(`[${new Date().toISOString()}] ${req.method} ${url.pathname} ${res.statusCode} ${Date.now() - t0}ms`);
+  });
 
   try {
     if (url.pathname === MCP_PATH) {
@@ -273,21 +281,15 @@ const httpServer = createServer(async (req, res) => {
       }
       try {
         const r = await confirmAvailability(id, start, nights);
-        // Count this campground's sites open for the whole [start, start+nights) stay.
-        let siteCount = 0;
-        for (const s of r.sites) {
-          let ok = true;
-          for (let n = 0; n < nights; n++) {
-            const d = new Date(start + "T00:00:00Z");
-            d.setUTCDate(d.getUTCDate() + n);
-            if (!s.available.includes(d.toISOString().slice(0, 10))) { ok = false; break; }
-          }
-          if (ok) siteCount++;
-        }
+        // Return the same per-park entry shape the map gets over SSE (parkAvailability,
+        // computed from the just-refreshed cache) so the client's optimistic write is
+        // byte-identical to the subsequent SSE echo — no dot flip.
+        const parks = parkAvailability(id, start, nights);
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(
-          JSON.stringify({ id, available: siteCount > 0, siteCount, harvestedAt: r.harvestedAt, source: "live" }),
+          JSON.stringify({ id, parks, harvestedAt: r.harvestedAt, source: "live" }),
         );
       } catch (e) {
+        console.warn(`[${new Date().toISOString()}] confirm failed id=${id} start=${start} x${nights}: ${(e as Error).message}`);
         res.writeHead(502, { "content-type": "application/json" }).end(JSON.stringify({ error: (e as Error).message }));
       }
       return;
@@ -309,7 +311,15 @@ const httpServer = createServer(async (req, res) => {
       res.write(":ok\n\n");
       const client: LiveClient = { res, start, nights };
       liveClients.add(client);
-      req.on("close", () => liveClients.delete(client));
+      console.log(`[${new Date().toISOString()}] live: client connected, clients=${liveClients.size}`);
+      // Bind cleanup to both req and res 'close'/'error' so a half-open or errored stream
+      // can't leak a client or throw an uncaught async stream error.
+      const drop = () => {
+        if (liveClients.delete(client)) console.log(`[${new Date().toISOString()}] live: client gone, clients=${liveClients.size}`);
+      };
+      req.on("close", drop);
+      res.on("close", drop);
+      res.on("error", drop);
       return;
     }
 
@@ -334,7 +344,9 @@ const httpServer = createServer(async (req, res) => {
       const nights = Math.max(1, Math.min(30, Number(url.searchParams.get("nights")) || 1));
       const days = Math.max(7, Math.min(90, Number(url.searchParams.get("days")) || 42));
       const cal = harvestCalendar(id, start, nights, days);
-      res.writeHead(200, { "content-type": "application/json", "cache-control": "public, max-age=300" }).end(
+      // no-store: a cheap local bitmap read, and the popup's freshness check must see the
+      // true current harvestedAt (a cached older value would trip needless live confirms).
+      res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(
         JSON.stringify(cal ? { harvested: true, ...cal } : { harvested: false, cells: [] }),
       );
       return;

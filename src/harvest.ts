@@ -27,9 +27,10 @@ export function refreshIntervalMs(parkId: string, occupancy: number): number {
   return hours * 60 * 60 * 1000;
 }
 // "Stale" means a refresh is overdue (harvester falling behind / genuinely old), not
-// merely "older than a fixed cutoff" — so it scales with the park's own cadence.
+// merely "older than a fixed cutoff" — so it scales with the park's OWN cadence (a flat
+// 12h floor made fast-tier parks read fresh while the harvester already treated them due).
 function staleAfter(parkId: string, occupancy: number): number {
-  return Math.max(12 * 60 * 60 * 1000, refreshIntervalMs(parkId, occupancy) * 1.5);
+  return refreshIntervalMs(parkId, occupancy) * 1.25;
 }
 
 const db = openDb();
@@ -71,16 +72,25 @@ function openDb(): Database | null {
 }
 
 // Disk writes are best-effort: a read-only cache DB must never crash a read or a booking
-// query — it just means the harvest can't be persisted/refreshed.
-let writeWarned = false;
+// query — it just means the harvest can't be persisted/refreshed. Warn at most every 5 min
+// (a warn-once latch would hide a persistent read-only condition forever) and log recovery.
+const WRITE_WARN_INTERVAL_MS = 5 * 60 * 1000;
+let lastWriteWarn = 0;
+let writeFailing = false;
 function safeWrite(fn: () => void): boolean {
   try {
     fn();
+    if (writeFailing) {
+      writeFailing = false;
+      console.warn(`[${new Date().toISOString()}] harvest: writes recovered`);
+    }
     return true;
   } catch (e) {
-    if (!writeWarned) {
-      writeWarned = true;
-      console.warn(`harvest: write failed, serving read-only cache: ${(e as Error).message}`);
+    const now = Date.now();
+    if (now - lastWriteWarn > WRITE_WARN_INTERVAL_MS) {
+      lastWriteWarn = now;
+      writeFailing = true;
+      console.warn(`[${new Date().toISOString()}] harvest: write failed (read-only cache?): ${(e as Error).message}`);
     }
     return false;
   }
@@ -101,8 +111,8 @@ function emitHarvest(parkId: string): void {
   for (const cb of harvestListeners) {
     try {
       cb(parkId);
-    } catch {
-      /* a bad listener must not break harvesting */
+    } catch (e) {
+      console.warn(`harvest: live listener failed for ${parkId}: ${(e as Error).message}`);
     }
   }
 }
@@ -175,13 +185,26 @@ export function refreshHarvestRange(
   }
   const windowDays = m.windowDays ?? HARVEST_DAYS;
   const base = daysBetween(m.windowStart, rangeStartISO);
+  // Does this re-check span the whole stored window? Only then can a row's bits be
+  // authored from scratch (otherwise the un-refreshed days would be left at 0 = FULL).
+  const coversWholeWindow = base <= 0 && base + rangeDays >= windowDays;
   const get = db.query("SELECT bits FROM site_avail WHERE parkId = ? AND siteId = ?");
   const put = db.prepare(
     "INSERT OR REPLACE INTO site_avail (parkId, siteId, label, loop, siteUrl, quota, bits) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
+  let merged = 0;
+  let skipped = 0;
   const tx = db.transaction(() => {
     for (const s of sites) {
       const row = get.get(parentId, s.siteId) as { bits: Uint8Array } | null;
+      // Brand-new site with only a partial re-check: zero-filling would mark every day
+      // OUTSIDE [base, base+rangeDays) as FULL across the rest of the 90-day window —
+      // wrong dot colors until the next full harvest. Skip it; storeHarvest will add it
+      // with real bits. Author from scratch only when the range covers the whole window.
+      if (!row && !coversWholeWindow) {
+        skipped++;
+        continue;
+      }
       const bits = row ? new Uint8Array(row.bits) : new Uint8Array(BYTES);
       const avail = new Set(s.available);
       for (let i = 0; i < rangeDays; i++) {
@@ -191,8 +214,38 @@ export function refreshHarvestRange(
         else bits[day >> 3] &= ~(1 << (day & 7));
       }
       put.run(parentId, s.siteId, s.label, s.loop ?? null, s.siteUrl ?? null, s.quota ?? null, Buffer.from(bits));
+      merged++;
     }
-    db!.run("UPDATE park_meta SET updated = ? WHERE parkId = ?", [Date.now(), parentId]);
+    // Reconcile deletions: confirm fetches the FULL parent site list (registry.ts
+    // confirmAvailability → rawAvailability(parent)), so any stored site missing from
+    // the live set was removed upstream. Drop its stale bits so it can't keep showing
+    // available. (Guard: only when the live fetch actually returned sites, so a failed/
+    // empty upstream call never wipes the whole park.)
+    let deleted = 0;
+    if (sites.length > 0) {
+      const liveIds = new Set(sites.map((s) => s.siteId));
+      const stored = db!
+        .query("SELECT siteId FROM site_avail WHERE parkId = ?")
+        .all(parentId) as { siteId: string }[];
+      const orphans = stored.filter((r) => !liveIds.has(r.siteId)).map((r) => r.siteId);
+      for (const id of orphans) db!.run("DELETE FROM site_avail WHERE parkId = ? AND siteId = ?", [parentId, id]);
+      deleted = orphans.length;
+    }
+    // Recompute occupancy over the actual stored bitmaps — it feeds staleAfter() and the
+    // harvester's cadence, so a bumped `updated` with stale occupancy would re-flag the
+    // just-refreshed park as stale. (Cheap: one park's sites.)
+    let availDays = 0, n = 0;
+    for (const r of db!.query("SELECT bits FROM site_avail WHERE parkId = ?").all(parentId) as { bits: Uint8Array }[]) {
+      n++;
+      for (let i = 0; i < windowDays; i++) if (getBit(r.bits, i)) availDays++;
+    }
+    const occupancy = n > 0 ? Math.max(0, Math.min(1, 1 - availDays / (n * windowDays))) : (m.occupancy ?? 0);
+    db!.run("UPDATE park_meta SET updated = ?, occupancy = ?, siteCount = ? WHERE parkId = ?", [Date.now(), occupancy, n, parentId]);
+    if (skipped || deleted) {
+      console.log(
+        `harvest: refreshRange ${parentId} [${rangeStartISO}+${rangeDays}d] merged=${merged} skipped-new=${skipped} deleted-orphan=${deleted}`,
+      );
+    }
   });
   if (safeWrite(tx)) emitHarvest(parentId);
 }
@@ -325,12 +378,15 @@ export function bulkAvailability(startISO: string, nights: number, since = 0): R
   return out;
 }
 
-/** Live push: the entries for a single park (used to push just-updated dots over SSE). */
+/** Live push: entries for one park (used over SSE and by /api/confirm). Accepts a parent
+ * OR a per-campground child id — park_meta is keyed by parent, so resolve it; the result
+ * keys split parents back into their child ids, matching the catalogue / bulk shape. */
 export function parkAvailability(parkId: string, startISO: string, nights: number): Record<string, BulkEntry> {
   if (!db) return {};
+  const { parent } = splitCampgroundId(parkId);
   const m = db
     .query("SELECT parkId, windowStart, windowDays, updated, occupancy FROM park_meta WHERE parkId = ? AND ok = 1")
-    .get(parkId) as MetaLite | null;
+    .get(parent) as MetaLite | null;
   return m ? entriesForMeta(m, startISO, nights) : {};
 }
 

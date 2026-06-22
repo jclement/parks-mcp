@@ -27,4 +27,8 @@ export function harvestDone(parkId: string, ok: boolean, sites: number, ms: numb
   harvestEvents.current = null;
   harvestEvents.recent.unshift({ parkId, ok, sites, ms, error, at: Date.now() });
   if (harvestEvents.recent.length > 60) harvestEvents.recent.length = 60;
+  // Failures always log (harvestOne swallows its own throw, so this is the only signal);
+  // successes only with HARVEST_LOG to avoid spamming a line per park per cycle.
+  if (!ok) console.warn(`[${new Date().toISOString()}] harvest ${parkId} FAILED ${ms}ms: ${error ?? "unknown error"}`);
+  else if (process.env.HARVEST_LOG) console.log(`harvest ${parkId} ok sites=${sites} ${ms}ms`);
 }

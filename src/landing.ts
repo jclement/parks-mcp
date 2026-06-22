@@ -345,7 +345,7 @@ export const LANDING_HTML = `<!doctype html>
     const ring=status&&RING[status];
     const sh=ring?"box-shadow:0 0 0 1.5px #0b0f14,0 0 0 4px "+ring+";":"";
     const style="width:"+s+"px;height:"+s+"px;background:"+c+";border:1.5px solid #0b0f14;"+(back?"transform:rotate(45deg);":"border-radius:50%;")+sh;
-    const r=s+(ring?8:0);
+    const r=s+8; // always reserve ring space so setIcon never resizes the marker (no flash)
     return L.divIcon({className:"",html:'<div style="'+style+'"></div>',iconSize:[r,r],iconAnchor:[s/2,s/2],popupAnchor:[0,-s/2]});
   }
   function statusOf(p){const b=bulk[p.id]; if(!prefs.start||!b)return null; if(b.pending)return "pending"; return b.stale?"stale":b.available?"available":"full";}
@@ -366,10 +366,19 @@ export const LANDING_HTML = `<!doctype html>
     $("sub").textContent = msg || (parkCount + " parks");
     $("mhint").textContent = msg;
   }
-  let bulkServerTime=0;
-  async function lightUp(){
+  // prefsGen: bumped on every date/nights change so a stale async response (lightUp,
+  // poll, confirm) for an old date can't overwrite the current bulk. bulkServerTime only
+  // advances forward, so a late/fallback response never rewinds the delta cursor.
+  let bulkServerTime=0, prefsGen=0;
+  async function lightUp(gen){
     if(!prefs.start){bulk={};bulkServerTime=0;refreshPins();return;}
-    try{const r=await fetch("/api/availability-bulk?start="+prefs.start+"&nights="+prefs.nights);const d=await r.json();bulk=d.parks||{};bulkServerTime=d.serverTime||0;}catch(e){bulk={};}
+    try{
+      const r=await fetch("/api/availability-bulk?start="+prefs.start+"&nights="+prefs.nights);
+      const d=await r.json();
+      if(gen!==prefsGen)return; // superseded by a newer date/nights
+      bulk=d.parks||{}; if((d.serverTime||0)>bulkServerTime)bulkServerTime=d.serverTime||0;
+    }catch(e){ if(gen!==prefsGen)return; bulk={}; }
+    if(gen!==prefsGen)return;
     refreshPins();
   }
   // Live dot refresh — SSE pushes just-changed dots the instant the server's cache updates
@@ -383,18 +392,22 @@ export const LANDING_HTML = `<!doctype html>
     es=new EventSource("/api/live?start="+prefs.start+"&nights="+prefs.nights);
     es.onopen=()=>{sseOpen=true;};
     es.onerror=()=>{sseOpen=false;}; // EventSource auto-reconnects; pollBulk covers the gap
-    es.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.parks&&Object.keys(d.parks).length){Object.assign(bulk,d.parks);refreshPins();}}catch(e){}};
+    es.onmessage=ev=>{try{const d=JSON.parse(ev.data);
+      if(d.serverTime&&d.serverTime>bulkServerTime)bulkServerTime=d.serverTime; // advance cursor even on empty/hb frames
+      if(d.parks&&Object.keys(d.parks).length){Object.assign(bulk,d.parks);refreshPins();}}catch(e){}};
   }
   async function pollBulk(){
     if(sseOpen||!prefs.start||!bulkServerTime)return;
+    const gen=prefsGen;
     try{
       const r=await fetch("/api/availability-bulk?start="+prefs.start+"&nights="+prefs.nights+"&since="+bulkServerTime);
-      const d=await r.json(); if(d.serverTime)bulkServerTime=d.serverTime;
+      const d=await r.json(); if(gen!==prefsGen)return;
+      if(d.serverTime&&d.serverTime>bulkServerTime)bulkServerTime=d.serverTime;
       const delta=d.parks||{}; if(Object.keys(delta).length){Object.assign(bulk,delta);refreshPins();}
     }catch(e){}
   }
   setInterval(pollBulk, 5*60*1000);
-  function onPrefsChanged(){savePrefs();lightUp();startLive();}
+  function onPrefsChanged(){const g=++prefsGen;bulkServerTime=0;savePrefs();lightUp(g);startLive();}
   elStart.onchange=onPrefsChanged; elNights.onchange=onPrefsChanged;
   for(const el of [elHide,elFront,elBack])el.onchange=()=>{savePrefs();refreshPins();};
   elPublic.onchange=()=>{savePrefs();syncPublic();};
@@ -498,8 +511,9 @@ export const LANDING_HTML = `<!doctype html>
   queueHash();
 
   // ----- detail panel (mobile full-screen, desktop floating card) -----
+  let activeConfirm=null;
   function openDetail(){$("detail").classList.add("on");}
-  function closeDetail(){$("detail").classList.remove("on");}
+  function closeDetail(){$("detail").classList.remove("on");if(activeConfirm){activeConfirm.abort();activeConfirm=null;}}
   $("dclose").onclick=closeDetail;
   map.on("click",closeDetail);
   document.addEventListener("keydown",ev=>{if(ev.key==="Escape")closeDetail();});
@@ -538,24 +552,28 @@ export const LANDING_HTML = `<!doctype html>
         return '<div class="d '+cls+sel+'" title="'+tip+'">'+day+'</div>';
       }).join("");
       grid.innerHTML=wd+cells;
-      // If this park's cache is >30 min old, live-refresh it (spinner) so the booking
-      // dates you're looking at are current.
-      if(c.harvestedAt&&Date.now()-c.harvestedAt>30*60000&&!p._confirming&&Date.now()-(p._confirmedAt||0)>300000)maybeConfirm(p,host);
+      // Live-refresh ONCE per open if this park's cache is >30 min old, so the dates you're
+      // viewing are current. host._verified caps it at one attempt per panel-open, so a
+      // read-only cache / failing confirm (harvestedAt never advances) can't re-spin forever.
+      if(c.harvestedAt&&Date.now()-c.harvestedAt>30*60000&&!host._verified)maybeConfirm(p,host);
     }).catch(()=>{grid.innerHTML='<div class="calnote">Availability unavailable.</div>';});
   }
-  // Live-verify one park, update its dot, and re-render the calendar from the now-fresh cache.
+  // Live-verify one park, update its dot(s), and re-render the calendar from the fresh cache.
   async function maybeConfirm(p,host){
-    if(p._confirming)return; p._confirming=true; p._confirmedAt=Date.now();
+    if(host._verified)return; host._verified=true;          // one attempt per open host
+    const gen=prefsGen,start=prefs.start,nights=prefs.nights; // pin the request to these prefs
     const lbl=host.querySelector(".mlabel span"); if(lbl&&!lbl.querySelector(".cspin"))lbl.insertAdjacentHTML("beforeend",' <span class="cspin"></span>');
-    const ctl=new AbortController(); const to=setTimeout(()=>ctl.abort(),45000);
+    const ctl=new AbortController(); activeConfirm=ctl; const to=setTimeout(()=>ctl.abort(),45000);
+    const unspin=()=>{const sp=host.querySelector(".cspin");if(sp)sp.remove();};
     try{
-      const r=await fetch("/api/confirm?id="+encodeURIComponent(p.id)+"&start="+prefs.start+"&nights="+prefs.nights,{signal:ctl.signal});
+      const r=await fetch("/api/confirm?id="+encodeURIComponent(p.id)+"&start="+start+"&nights="+nights,{signal:ctl.signal});
+      if(!r.ok){unspin();return;}
       const d=await r.json();
-      if(d&&typeof d.siteCount==="number"){bulk[p.id]={available:d.available,siteCount:d.siteCount,stale:false};refreshPins();}
-      p._confirmedAt=Date.now(); p._confirming=false;
-      renderCal(host,p,host._offset||0,true); // re-render, cache-busted, from the refreshed data
-    }catch(e){p._confirming=false;const sp=host.querySelector(".cspin");if(sp)sp.remove();}
-    finally{clearTimeout(to);}
+      if(gen!==prefsGen||start!==prefs.start||nights!==prefs.nights){unspin();return;} // prefs changed mid-flight
+      if(d&&d.parks){Object.assign(bulk,d.parks);refreshPins();} // same shape as SSE — no flip
+      renderCal(host,p,host._offset||0,true); // re-render (cache-busted) replaces the spinner
+    }catch(e){unspin();}
+    finally{clearTimeout(to);if(activeConfirm===ctl)activeConfirm=null;}
   }
 
   function openParkDetail(p){
@@ -594,7 +612,7 @@ export const LANDING_HTML = `<!doctype html>
     parkCount=d.count; $("sub").textContent=parkCount+" parks";
     // Initial view is set once up front: #m=lat,lng,z from the URL, else all of Canada.
     // Don't re-fit to pins here — that would override a bookmarked position/zoom.
-    await lightUp();
+    await lightUp(prefsGen);
     startLive();
   }catch(e){$("sub").textContent="data unavailable";}
 
