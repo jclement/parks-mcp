@@ -185,9 +185,20 @@ export function refreshHarvestRange(
   }
   const windowDays = m.windowDays ?? HARVEST_DAYS;
   const base = daysBetween(m.windowStart, rangeStartISO);
+  // A confirm on a date beyond the harvested edge EXTENDS the window (grow each site's
+  // bitmap) instead of discarding the live data — upstream booking windows run past our
+  // 90 days, so "beyond the window" dates are often genuinely bookable and the cache
+  // should learn them rather than serving "pending" forever. Only when the range is
+  // CONTIGUOUS with the stored window (base <= windowDays): a gap of never-checked days
+  // would otherwise read as zero bits = "full" for every site. Capped for sanity.
+  const newWindowDays =
+    sites.length > 0 && base >= 0 && base <= windowDays
+      ? Math.min(Math.max(windowDays, base + rangeDays), 366)
+      : windowDays;
+  const newBytes = Math.ceil(newWindowDays / 8);
   // Does this re-check span the whole stored window? Only then can a row's bits be
   // authored from scratch (otherwise the un-refreshed days would be left at 0 = FULL).
-  const coversWholeWindow = base <= 0 && base + rangeDays >= windowDays;
+  const coversWholeWindow = base <= 0 && base + rangeDays >= newWindowDays;
   const get = db.query("SELECT bits FROM site_avail WHERE parkId = ? AND siteId = ?");
   const put = db.prepare(
     "INSERT OR REPLACE INTO site_avail (parkId, siteId, label, loop, siteUrl, quota, bits) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -205,11 +216,12 @@ export function refreshHarvestRange(
         skipped++;
         continue;
       }
-      const bits = row ? new Uint8Array(row.bits) : new Uint8Array(BYTES);
+      const bits = new Uint8Array(Math.max(newBytes, row ? row.bits.length : BYTES));
+      if (row) bits.set(row.bits); // grow, preserving existing days
       const avail = new Set(s.available);
       for (let i = 0; i < rangeDays; i++) {
         const day = base + i;
-        if (day < 0 || day >= windowDays) continue;
+        if (day < 0 || day >= newWindowDays) continue;
         if (avail.has(addDaysISO(rangeStartISO, i))) bits[day >> 3] |= 1 << (day & 7);
         else bits[day >> 3] &= ~(1 << (day & 7));
       }
@@ -222,7 +234,9 @@ export function refreshHarvestRange(
     // available. (Guard: only when the live fetch actually returned sites, so a failed/
     // empty upstream call never wipes the whole park.)
     let deleted = 0;
-    if (sites.length > 0) {
+    // Skip reconciliation when the range never overlapped the stored window (a gap
+    // confirm merges nothing — deleting "orphans" there would trust a fetch we ignored).
+    if (sites.length > 0 && base < newWindowDays) {
       const liveIds = new Set(sites.map((s) => s.siteId));
       const stored = db!
         .query("SELECT siteId FROM site_avail WHERE parkId = ?")
@@ -237,10 +251,12 @@ export function refreshHarvestRange(
     let availDays = 0, n = 0;
     for (const r of db!.query("SELECT bits FROM site_avail WHERE parkId = ?").all(parentId) as { bits: Uint8Array }[]) {
       n++;
-      for (let i = 0; i < windowDays; i++) if (getBit(r.bits, i)) availDays++;
+      for (let i = 0; i < newWindowDays; i++) if (getBit(r.bits, i)) availDays++;
     }
-    const occupancy = n > 0 ? Math.max(0, Math.min(1, 1 - availDays / (n * windowDays))) : (m.occupancy ?? 0);
-    db!.run("UPDATE park_meta SET updated = ?, occupancy = ?, siteCount = ? WHERE parkId = ?", [Date.now(), occupancy, n, parentId]);
+    const occupancy = n > 0 ? Math.max(0, Math.min(1, 1 - availDays / (n * newWindowDays))) : (m.occupancy ?? 0);
+    db!.run("UPDATE park_meta SET updated = ?, occupancy = ?, siteCount = ?, windowDays = ? WHERE parkId = ?", [
+      Date.now(), occupancy, n, newWindowDays, parentId,
+    ]);
     if (skipped || deleted) {
       console.log(
         `harvest: refreshRange ${parentId} [${rangeStartISO}+${rangeDays}d] merged=${merged} skipped-new=${skipped} deleted-orphan=${deleted}`,
@@ -396,18 +412,19 @@ export function calendar(
   startISO: string,
   nights: number,
   days: number,
-): { stale: boolean; harvestedAt: number; cells: { date: string; available: boolean; siteCount: number }[] } | null {
+): { stale: boolean; harvestedAt: number; cells: { date: string; available: boolean; siteCount: number; unknown?: boolean }[] } | null {
   const { parent, cg } = splitCampgroundId(parkId);
   const m = okMeta(parent);
   if (!m) return null;
   const covered = m.windowDays ?? HARVEST_DAYS;
   let rows = db!.query("SELECT loop, bits FROM site_avail WHERE parkId = ?").all(parent) as { loop: string | null; bits: Uint8Array }[];
   if (cg) rows = rows.filter((r) => campgroundOf(r.loop) === cg);
-  const cells: { date: string; available: boolean; siteCount: number }[] = [];
+  const cells: { date: string; available: boolean; siteCount: number; unknown?: boolean }[] = [];
   for (let d = 0; d < days; d++) {
     const date = addDaysISO(startISO, d);
     const offset = daysBetween(m.windowStart, date);
-    if (offset < 0 || offset + nights > covered) { cells.push({ date, available: false, siteCount: -1 }); continue; }
+    // unknown: outside the harvested window — "no data", NOT "unavailable".
+    if (offset < 0 || offset + nights > covered) { cells.push({ date, available: false, siteCount: -1, unknown: true }); continue; }
     let count = 0;
     for (const r of rows) {
       let ok = true;

@@ -7,6 +7,7 @@ import { registerTools } from "./mcp.ts";
 import { LANDING_HTML } from "./landing.ts";
 import { campgroundInfo, checkAvailability, confirmAvailability, geocodeSearch, listCampgrounds } from "./providers/registry.ts";
 import { publicLands, publicZones } from "./providers/publiclands.ts";
+import { computeVacancies } from "./parks/service.ts";
 import { startHarvester } from "./harvester.ts";
 import { bulkAvailability, calendar as harvestCalendar, dbSizes, harvestStatus, onHarvestUpdate, parkAvailability, parkStatuses, statusByJurisdiction, windowInfo } from "./harvest.ts";
 import { harvestEvents, mcpStats } from "./stats.ts";
@@ -285,6 +286,13 @@ const httpServer = createServer(async (req, res) => {
         // computed from the just-refreshed cache) so the client's optimistic write is
         // byte-identical to the subsequent SSE echo — no dot flip.
         const parks = parkAvailability(id, start, nights);
+        // If the cache still can't answer (date beyond a window it couldn't extend, or a
+        // read-only cache dropped the write), the LIVE sites we just fetched are the truth —
+        // never tell the user a genuinely bookable date is pending/unavailable.
+        if (!parks[id] || parks[id].pending) {
+          const count = computeVacancies(r.sites, start, start, nights).length;
+          parks[id] = { available: count > 0, siteCount: count, stale: false };
+        }
         res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" }).end(
           JSON.stringify({ id, parks, harvestedAt: r.harvestedAt, source: "live" }),
         );

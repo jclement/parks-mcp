@@ -166,7 +166,9 @@ export function findVacancies(
   }
   return cached(`vac:${parkId}:${startISO}:${endISO}:${nights}`, AVAILABILITY_TTL, async () => {
     const { provider, localId } = route(parkId);
-    return { ...(await provider.vacancies(localId, startISO, endISO, nights)), parkId, source: "live" } as VacancyResult;
+    // stale:false so clients always get an explicit freshness flag (a live fetch is fresh
+    // by definition; leaving it undefined made JSON.stringify drop the key entirely).
+    return { ...(await provider.vacancies(localId, startISO, endISO, nights)), parkId, source: "live", stale: false } as VacancyResult;
   });
 }
 
@@ -278,6 +280,7 @@ export interface AvailabilityCheck {
   jurisdiction: string;
   bookingUrl: string;
   stale?: boolean;
+  source?: "harvest" | "live";
 }
 
 /** Is a stay of `nights` starting on `startISO` available at this campground? */
@@ -293,7 +296,8 @@ export function checkAvailability(
       siteCount: r.vacancies.length,
       jurisdiction: r.jurisdiction,
       bookingUrl: r.bookingUrl,
-      stale: r.stale,
+      stale: r.stale ?? false,
+      source: r.source, // "harvest" (bitmap) vs "live" (beyond-window fallthrough) — visible to clients
     };
   });
 }
